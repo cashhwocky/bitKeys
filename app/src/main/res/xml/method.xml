@@ -4,7 +4,9 @@
     android:settingsActivity="com.bitdroid.keys.SettingsActivity"
     android:supportsSwitchingToNextInputMethod="true">
     <subtype
+        android:imeSubtypeExtraValue="AsciiCapable"
         android:imeSubtypeLocale="en_US"
         android:imeSubtypeMode="keyboard"
+        android:isAsciiCapable="true"
         android:label="@string/subtype_en_us" />
 </input-method>
