@@ -12,6 +12,7 @@ data class KeyboardPrefs(
     val haptics: Boolean = true,
     val sound: Boolean = false,
     val autoCaps: Boolean = true,
+    val numpad: Boolean = true,
 ) {
     fun save(context: Context) {
         Storage.prefs(context, NAME).edit()
@@ -23,6 +24,7 @@ data class KeyboardPrefs(
             .putBoolean("haptics", haptics)
             .putBoolean("sound", sound)
             .putBoolean("auto_caps", autoCaps)
+            .putBoolean("numpad", numpad)
             .apply()
     }
 
@@ -41,6 +43,7 @@ data class KeyboardPrefs(
                 haptics = sp.getBoolean("haptics", d.haptics),
                 sound = sp.getBoolean("sound", d.sound),
                 autoCaps = sp.getBoolean("auto_caps", d.autoCaps),
+                numpad = sp.getBoolean("numpad", d.numpad),
             )
         }
     }

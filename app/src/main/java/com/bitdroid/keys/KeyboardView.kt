@@ -35,11 +35,11 @@ class KeyboardView(context: Context) : View(context) {
     }
 
     enum class ToolbarAction { EMOJI, CLIPBOARD, SETTINGS, MIC }
-    enum class Mode { LETTERS, SYMBOLS, SYMBOLS2 }
+    enum class Mode { LETTERS, SYMBOLS, SYMBOLS2, NUMPAD }
     enum class Shift { OFF, ON, LOCKED }
     enum class EnterStyle { ENTER, SEND, SEARCH, GO, NEXT, DONE }
 
-    private enum class Kind { CHAR, SHIFT, DELETE, MODE, PAGE, ABC, ENTER, SPACE, SPACER }
+    private enum class Kind { CHAR, SHIFT, DELETE, MODE, PAGE, ABC, NUMPAD, ENTER, SPACE, SPACER }
 
     private class Key(
         val kind: Kind,
@@ -137,6 +137,17 @@ class KeyboardView(context: Context) : View(context) {
 
     fun palette(): Palette = palette
 
+    /** Phone-number fields get * # + on the number pad instead of - , . */
+    private var phonePad = false
+
+    fun openNumpad(phone: Boolean) {
+        phonePad = phone
+        mode = Mode.NUMPAD
+        buildRows()
+        requestLayout()
+        invalidate()
+    }
+
     fun switchMode(m: Mode) {
         if (m == mode) return
         mode = m
@@ -172,10 +183,11 @@ class KeyboardView(context: Context) : View(context) {
     private fun chars(s: String, alts: String? = null): List<Key> =
         s.mapIndexed { i, ch -> Key(Kind.CHAR, ch.toString(), 1f, alts?.getOrNull(i)?.toString()) }
 
-    private fun bottomRow(modeLabel: String): List<Key> = listOf(
+    private fun bottomRow(modeLabel: String, numpadKey: Boolean = false): List<Key> = listOfNotNull(
         Key(Kind.MODE, modeLabel, 1.5f, mod = true),
+        if (numpadKey) Key(Kind.NUMPAD, "1234", 1.3f, mod = true) else null,
         Key(Kind.CHAR, ",", 1f, mod = true),
-        Key(Kind.SPACE, "", 4.6f),
+        Key(Kind.SPACE, "", if (numpadKey) 3.3f else 4.6f),
         Key(Kind.CHAR, ".", 1f, mod = true),
         Key(Kind.ENTER, "", 1.5f),
     )
@@ -193,13 +205,24 @@ class KeyboardView(context: Context) : View(context) {
                 chars("1234567890"),
                 chars("@#\$_&-+()/"),
                 listOf(Key(Kind.PAGE, "=\\<", 1.5f, mod = true)) + chars("*\"':;!?") + Key(Kind.DELETE, weight = 1.5f, mod = true),
-                bottomRow("ABC"),
+                bottomRow("ABC", numpadKey = true),
             )
             Mode.SYMBOLS2 -> listOf(
                 chars("~`|•√π÷×¶∆"),
                 chars("£¢€¥^°={}\\"),
                 listOf(Key(Kind.PAGE, "?123", 1.5f, mod = true)) + chars("%©®™✓[]") + Key(Kind.DELETE, weight = 1.5f, mod = true),
-                bottomRow("ABC"),
+                bottomRow("ABC", numpadKey = true),
+            )
+            Mode.NUMPAD -> listOf(
+                chars("123") + Key(Kind.CHAR, if (phonePad) "+" else "-", mod = true),
+                chars("456") + Key(Kind.CHAR, if (phonePad) "*" else ",", mod = true),
+                chars("789") + Key(Kind.DELETE, mod = true),
+                listOf(
+                    Key(Kind.ABC, "ABC", mod = true),
+                    Key(Kind.CHAR, "0"),
+                    Key(Kind.CHAR, if (phonePad) "#" else ".", mod = true),
+                    Key(Kind.ENTER),
+                ),
             )
         }
         if (width > 0) layoutKeys()
@@ -339,7 +362,7 @@ class KeyboardView(context: Context) : View(context) {
                 k.mod -> palette.mod
                 else -> palette.key
             }
-            val wide = k.kind == Kind.SPACE || k.kind == Kind.ENTER || k.kind == Kind.MODE || k.kind == Kind.ABC
+            val wide = k.kind == Kind.SPACE || k.kind == Kind.ENTER || k.kind == Kind.MODE || k.kind == Kind.ABC || k.kind == Kind.NUMPAD
             val r = if (wide && !square) tmp.height() / 2 else min(baseRadius, min(tmp.width(), tmp.height()) / 2)
 
             fillPaint.color = bg
@@ -359,7 +382,7 @@ class KeyboardView(context: Context) : View(context) {
             when (k.kind) {
                 Kind.CHAR -> {
                     textPaint.color = fg
-                    textPaint.textSize = sp(23f)
+                    textPaint.textSize = sp(if (mode == Mode.NUMPAD) 26f else 23f)
                     val label = if (upper && k.label[0].isLetter()) k.label.uppercase() else k.label
                     canvas.drawText(label, cx, baseline(tmp, textPaint), textPaint)
                     if (k.alt != null) {
@@ -368,7 +391,7 @@ class KeyboardView(context: Context) : View(context) {
                         canvas.drawText(k.alt, tmp.right - dp(8f), tmp.top + dp(13f), textPaint)
                     }
                 }
-                Kind.MODE, Kind.PAGE, Kind.ABC -> {
+                Kind.MODE, Kind.PAGE, Kind.ABC, Kind.NUMPAD -> {
                     labelPaint.color = fg
                     labelPaint.textSize = sp(15f)
                     canvas.drawText(k.label, cx, baseline(tmp, labelPaint), labelPaint)
@@ -552,6 +575,7 @@ class KeyboardView(context: Context) : View(context) {
                 Kind.MODE -> switchMode(if (mode == Mode.LETTERS) Mode.SYMBOLS else Mode.LETTERS)
                 Kind.PAGE -> switchMode(if (mode == Mode.SYMBOLS) Mode.SYMBOLS2 else Mode.SYMBOLS)
                 Kind.ABC -> switchMode(Mode.LETTERS)
+                Kind.NUMPAD -> openNumpad(phonePad)
                 else -> Unit
             }
         }

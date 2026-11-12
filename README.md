@@ -14,6 +14,7 @@ bitDroid's Keyboard App. It's a rounded-key keyboard that defaults to AMOLED bla
 - **Toolbar.** Emoji, paste from clipboard, settings, mic.
 - **Works on the lock screen after a reboot** (direct-boot aware), so you can type a password before the first unlock. Learned words stay in encrypted storage until unlock.
 - **Auto-capitalization** can be turned off in settings.
+- **Number pad.** A big phone-style pad opens automatically in number and phone fields (you can turn this off in settings), or tap **1234** on the symbols page.
 - **No dependencies.** Pure Kotlin and the Android SDK, about a 100 KB APK.
 
 ## Install

@@ -232,6 +232,7 @@ class SettingsActivity : Activity() {
         // Toggles
         column.addView(section("PREFERENCES", accent))
         column.addView(toggle("Auto-capitalization", "Capitalize the first letter of each sentence", prefs.autoCaps, accent) { update(prefs.copy(autoCaps = it)) })
+        column.addView(toggle("Number pad", "Show a big number pad in number and phone fields (or tap 1234 on the symbols page)", prefs.numpad, accent) { update(prefs.copy(numpad = it)) })
         column.addView(toggle("Number row", "Always show 1–0 above the letters", prefs.numberRow, accent) { update(prefs.copy(numberRow = it)) })
         column.addView(toggle("Key borders", "Outline each key", prefs.borders, accent) { update(prefs.copy(borders = it)) })
         column.addView(toggle("Haptic feedback", "Vibrate on keypress", prefs.haptics, accent) { update(prefs.copy(haptics = it)) })

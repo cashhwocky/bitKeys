@@ -67,12 +67,12 @@ class BitKeysService : InputMethodService(), KeyboardView.Listener, VoicePanelVi
 
         if (!restarting) {
             val cls = info.inputType and InputType.TYPE_MASK_CLASS
-            keyboard.switchMode(
-                when (cls) {
-                    InputType.TYPE_CLASS_NUMBER, InputType.TYPE_CLASS_PHONE, InputType.TYPE_CLASS_DATETIME -> KeyboardView.Mode.SYMBOLS
-                    else -> KeyboardView.Mode.LETTERS
-                }
-            )
+            when (cls) {
+                InputType.TYPE_CLASS_NUMBER, InputType.TYPE_CLASS_PHONE, InputType.TYPE_CLASS_DATETIME ->
+                    if (prefs.numpad) keyboard.openNumpad(phone = cls == InputType.TYPE_CLASS_PHONE)
+                    else keyboard.switchMode(KeyboardView.Mode.SYMBOLS)
+                else -> keyboard.switchMode(KeyboardView.Mode.LETTERS)
+            }
         }
         keyboard.setEnterStyle(enterStyleFor(info))
         showVoice(false)
@@ -142,7 +142,7 @@ class BitKeysService : InputMethodService(), KeyboardView.Listener, VoicePanelVi
         val hasSelection = !ic.getSelectedText(0).isNullOrEmpty()
         val word = currentWord()
         keyboard.setSuggestions(
-            if (hasSelection || word.isEmpty() || isPrivateField(info)) emptyList()
+            if (hasSelection || word.isEmpty() || isPrivateField(info) || keyboard.mode != KeyboardView.Mode.LETTERS) emptyList()
             else suggester.slots(word)
         )
     }
