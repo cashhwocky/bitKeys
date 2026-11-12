@@ -66,3 +66,27 @@ jobs:
         with:
           files: out/*-release.apk
           generate_release_notes: true
+
+      # Auto-release: when versionName in app/build.gradle.kts changes on main,
+      # create the matching v<version> tag + release with the APK attached.
+      - name: Check for new version
+        id: ver
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          V=$(grep -m1 'versionName = "' app/build.gradle.kts | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/v$V" > /dev/null; then
+            echo "new=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Auto-release new version
+        if: steps.ver.outputs.new == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: bitKeys v${{ steps.ver.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          files: out/*-release.apk
+          generate_release_notes: true
