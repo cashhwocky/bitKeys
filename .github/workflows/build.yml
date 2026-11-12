@@ -1,0 +1,66 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Optional release signing. Add these repo secrets to sign with your own key:
+      # BITKEYS_KEYSTORE_B64 (base64 of the .jks), BITKEYS_KEYSTORE_PASSWORD,
+      # BITKEYS_KEY_ALIAS, BITKEYS_KEY_PASSWORD. Without them the release APK is debug-signed.
+      - name: Decode signing key
+        env:
+          KS_B64: ${{ secrets.BITKEYS_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/bitkeys.jks"
+            echo "BITKEYS_KEYSTORE=$RUNNER_TEMP/bitkeys.jks" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build
+        env:
+          BITKEYS_KEYSTORE_PASSWORD: ${{ secrets.BITKEYS_KEYSTORE_PASSWORD }}
+          BITKEYS_KEY_ALIAS: ${{ secrets.BITKEYS_KEY_ALIAS }}
+          BITKEYS_KEY_PASSWORD: ${{ secrets.BITKEYS_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleDebug assembleRelease
+
+      - name: Collect APKs
+        run: |
+          mkdir -p out
+          cp app/build/outputs/apk/release/*.apk out/
+          cp app/build/outputs/apk/debug/*.apk out/
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bitKeys-apks
+          path: out/*.apk
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*-release.apk
+          generate_release_notes: true

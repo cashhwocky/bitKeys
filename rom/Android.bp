@@ -1,0 +1,16 @@
+// Drop this folder into your bitDroid tree (e.g. packages/apps/bitKeys/)
+// together with bitKeys.apk from the latest GitHub release, then add
+//   PRODUCT_PACKAGES += bitKeys
+// to your product makefile. `overrides` removes AOSP LatinIME so bitKeys
+// becomes the only (and therefore default) system keyboard on first boot.
+
+android_app_import {
+    name: "bitKeys",
+    apk: "bitKeys.apk",
+    certificate: "platform",
+    product_specific: true,
+    dex_preopt: {
+        enabled: true,
+    },
+    overrides: ["LatinIME"],
+}
