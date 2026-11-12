@@ -22,10 +22,11 @@ import android.widget.Toast
 import java.util.Locale
 import kotlin.math.abs
 
-class BitKeysService : InputMethodService(), KeyboardView.Listener, VoicePanelView.Listener {
+class BitKeysService : InputMethodService(), KeyboardView.Listener, VoicePanelView.Listener, EmojiPanelView.Listener {
 
     private lateinit var keyboard: KeyboardView
     private lateinit var voice: VoicePanelView
+    private lateinit var emoji: EmojiPanelView
     private lateinit var suggester: Suggester
     private var prefs = KeyboardPrefs()
 
@@ -46,9 +47,14 @@ class BitKeysService : InputMethodService(), KeyboardView.Listener, VoicePanelVi
             it.listener = this
             it.visibility = View.GONE
         }
+        emoji = EmojiPanelView(this).also {
+            it.listener = this
+            it.visibility = View.GONE
+        }
         return FrameLayout(this).apply {
             addView(keyboard, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             addView(voice, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(emoji, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
     }
 
@@ -57,6 +63,7 @@ class BitKeysService : InputMethodService(), KeyboardView.Listener, VoicePanelVi
         prefs = KeyboardPrefs.load(this)
         keyboard.applyPrefs(prefs)
         voice.setPalette(keyboard.palette())
+        emoji.setPalette(keyboard.palette(), prefs.shape)
 
         if (!restarting) {
             val cls = info.inputType and InputType.TYPE_MASK_CLASS
@@ -69,6 +76,7 @@ class BitKeysService : InputMethodService(), KeyboardView.Listener, VoicePanelVi
         }
         keyboard.setEnterStyle(enterStyleFor(info))
         showVoice(false)
+        showEmoji(false)
         refresh()
     }
 
@@ -128,13 +136,13 @@ class BitKeysService : InputMethodService(), KeyboardView.Listener, VoicePanelVi
     private fun refresh() {
         val ic = currentInputConnection ?: return
         val info = currentInputEditorInfo
-        val caps = info != null && info.inputType != 0 && ic.getCursorCapsMode(info.inputType) != 0
+        val caps = prefs.autoCaps && info != null && info.inputType != 0 && ic.getCursorCapsMode(info.inputType) != 0
         keyboard.setAutoShift(caps)
 
         val hasSelection = !ic.getSelectedText(0).isNullOrEmpty()
         val word = currentWord()
         keyboard.setSuggestions(
-            if (hasSelection || word.isEmpty() || isPrivateField(info) || keyboard.mode == KeyboardView.Mode.EMOJI) emptyList()
+            if (hasSelection || word.isEmpty() || isPrivateField(info)) emptyList()
             else suggester.slots(word)
         )
     }
@@ -214,6 +222,7 @@ class BitKeysService : InputMethodService(), KeyboardView.Listener, VoicePanelVi
                     refresh()
                 }
             }
+            KeyboardView.ToolbarAction.EMOJI -> showEmoji(true)
             KeyboardView.ToolbarAction.SETTINGS -> openSettings(false)
             KeyboardView.ToolbarAction.MIC -> startVoice()
         }
@@ -230,6 +239,39 @@ class BitKeysService : InputMethodService(), KeyboardView.Listener, VoicePanelVi
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 .putExtra(SettingsActivity.EXTRA_REQUEST_MIC, requestMic)
         )
+    }
+
+    // ------------------------------------------------------------ emoji panel
+
+    private fun showEmoji(show: Boolean) {
+        if (!::emoji.isInitialized) return
+        if (show) {
+            emoji.fixedHeight = keyboard.height
+            emoji.bottomInset = keyboard.navInset
+            emoji.onOpen()
+            emoji.visibility = View.VISIBLE
+            keyboard.visibility = View.INVISIBLE
+        } else {
+            emoji.visibility = View.GONE
+            keyboard.visibility = View.VISIBLE
+        }
+    }
+
+    override fun onEmoji(emoji: String) {
+        currentInputConnection?.commitText(emoji, 1)
+    }
+
+    override fun onEmojiDelete() {
+        onDelete()
+    }
+
+    override fun onEmojiSpace() {
+        currentInputConnection?.commitText(" ", 1)
+    }
+
+    override fun onEmojiAbc() {
+        showEmoji(false)
+        refresh()
     }
 
     // ------------------------------------------------------------ voice typing

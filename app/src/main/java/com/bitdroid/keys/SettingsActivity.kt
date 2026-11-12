@@ -231,6 +231,7 @@ class SettingsActivity : Activity() {
 
         // Toggles
         column.addView(section("PREFERENCES", accent))
+        column.addView(toggle("Auto-capitalization", "Capitalize the first letter of each sentence", prefs.autoCaps, accent) { update(prefs.copy(autoCaps = it)) })
         column.addView(toggle("Number row", "Always show 1–0 above the letters", prefs.numberRow, accent) { update(prefs.copy(numberRow = it)) })
         column.addView(toggle("Key borders", "Outline each key", prefs.borders, accent) { update(prefs.copy(borders = it)) })
         column.addView(toggle("Haptic feedback", "Vibrate on keypress", prefs.haptics, accent) { update(prefs.copy(haptics = it)) })

@@ -10,7 +10,10 @@ bitDroid's Keyboard App. It's a rounded-key keyboard that defaults to AMOLED bla
 - **Voice typing.** Three light ribbons swell with your voice. Dictation runs continuously, with live partial results, pause/resume and delete-last-word. It uses the on-device recognizer when the phone has one (Android 13+).
 - **Suggestions.** A strip shows what you typed, the best match and a second option. It learns words you type (stored on the device only, never in password or incognito fields).
 - **Typing extras.** Multi-touch rollover, long-press the top row for digits, double-tap shift for caps lock, double space for ". ", and swipe the space bar to move the cursor.
-- **Toolbar.** Emoji panel, paste from clipboard, settings, mic.
+- **Every emoji.** All 1,900+ Unicode emoji (Emoji 18.0) in categories, with recents and skin tones on long-press. Emoji the phone's font can't draw are hidden automatically.
+- **Toolbar.** Emoji, paste from clipboard, settings, mic.
+- **Works on the lock screen after a reboot** (direct-boot aware), so you can type a password before the first unlock. Learned words stay in encrypted storage until unlock.
+- **Auto-capitalization** can be turned off in settings.
 - **No dependencies.** Pure Kotlin and the Android SDK, about a 100 KB APK.
 
 ## Install
@@ -29,6 +32,14 @@ Every push to `main` builds debug and release APKs in GitHub Actions. Pushing a 
 
 To sign releases with your own key, add these repo secrets: `BITKEYS_KEYSTORE_B64`, `BITKEYS_KEYSTORE_PASSWORD`, `BITKEYS_KEY_ALIAS` and `BITKEYS_KEY_PASSWORD`. Without them, the release APK is debug-signed.
 
+## Emoji data
+
+`app/src/main/assets/emoji.txt` is generated from Unicode's `emoji-test.txt` with `tools/gen_emoji.py`. To update it for a new Unicode release, run:
+
+```sh
+python3 tools/gen_emoji.py emoji-test.txt > app/src/main/assets/emoji.txt
+```
+
 ## Ship it in bitDroid
 
 See [`rom/Android.bp`](rom/Android.bp). Put it with `bitKeys.apk` in your tree and add `PRODUCT_PACKAGES += bitKeys`. Its `overrides: ["LatinIME"]` removes the AOSP keyboard so bitKeys is the default on first boot.
@@ -42,6 +53,8 @@ See [`rom/Android.bp`](rom/Android.bp). Put it with `bitKeys.apk` in your tree a
 | `VoicePanelView.kt` | Voice-typing panel and ribbon animation |
 | `SettingsActivity.kt` | Setup steps, themes, accent, key shape, toggles |
 | `Theme.kt` | Preferences and color palettes |
+| `EmojiPanelView.kt` | Full emoji keyboard (categories, recents, skin tones) |
+| `Storage.kt` | Device-protected settings storage for direct boot |
 | `Suggester.kt` | Word predictions and learning |
 | `Icons.kt` | Vector icons drawn on a 24×24 grid |
 

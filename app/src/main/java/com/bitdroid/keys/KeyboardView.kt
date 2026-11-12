@@ -34,8 +34,8 @@ class KeyboardView(context: Context) : View(context) {
         fun onCursorMove(steps: Int)
     }
 
-    enum class ToolbarAction { CLIPBOARD, SETTINGS, MIC }
-    enum class Mode { LETTERS, SYMBOLS, SYMBOLS2, EMOJI }
+    enum class ToolbarAction { EMOJI, CLIPBOARD, SETTINGS, MIC }
+    enum class Mode { LETTERS, SYMBOLS, SYMBOLS2 }
     enum class Shift { OFF, ON, LOCKED }
     enum class EnterStyle { ENTER, SEND, SEARCH, GO, NEXT, DONE }
 
@@ -96,7 +96,7 @@ class KeyboardView(context: Context) : View(context) {
     private val sidePad = dp(6f)
     private val topPad = dp(4f)
     private val stripGap = dp(6f)
-    private val bottomPad = dp(12f)
+    private val bottomPad = dp(22f) // breathing room above the system back / IME-switcher row
     var navInset = 0
         private set
 
@@ -200,13 +200,6 @@ class KeyboardView(context: Context) : View(context) {
                 chars("£¢€¥^°={}\\"),
                 listOf(Key(Kind.PAGE, "?123", 1.5f, mod = true)) + chars("%©®™✓[]") + Key(Kind.DELETE, weight = 1.5f, mod = true),
                 bottomRow("ABC"),
-            )
-            Mode.EMOJI -> EMOJI.chunked(8).take(4).map { row -> row.map { Key(Kind.CHAR, it) } } + listOf(
-                listOf(
-                    Key(Kind.ABC, "ABC", 1.5f, mod = true),
-                    Key(Kind.SPACE, "", 5f),
-                    Key(Kind.DELETE, weight = 1.5f, mod = true),
-                )
             )
         }
         if (width > 0) layoutKeys()
@@ -322,10 +315,7 @@ class KeyboardView(context: Context) : View(context) {
                     }
                     Icons.draw(canvas, Icon.MIC, r.centerX(), r.centerY(), iconSize, palette.accent, weight = 1.9f)
                 }
-                t.emoji -> {
-                    val active = mode == Mode.EMOJI
-                    Icons.draw(canvas, if (active) Icon.KEYBOARD else Icon.EMOJI, r.centerX(), r.centerY(), iconSize, if (active) palette.accent else palette.sub)
-                }
+                t.emoji -> Icons.draw(canvas, Icon.EMOJI, r.centerX(), r.centerY(), iconSize, palette.sub)
                 t.action == ToolbarAction.CLIPBOARD -> Icons.draw(canvas, Icon.CLIPBOARD, r.centerX(), r.centerY(), iconSize, palette.sub)
                 t.action == ToolbarAction.SETTINGS -> Icons.draw(canvas, Icon.SETTINGS, r.centerX(), r.centerY(), iconSize, palette.sub)
             }
@@ -368,9 +358,8 @@ class KeyboardView(context: Context) : View(context) {
             val fg = if (accentKey) palette.onAccent else palette.text
             when (k.kind) {
                 Kind.CHAR -> {
-                    val isEmoji = mode == Mode.EMOJI
                     textPaint.color = fg
-                    textPaint.textSize = sp(if (isEmoji) 25f else 22f)
+                    textPaint.textSize = sp(22f)
                     val label = if (upper && k.label[0].isLetter()) k.label.uppercase() else k.label
                     canvas.drawText(label, cx, baseline(tmp, textPaint), textPaint)
                     if (k.alt != null) {
@@ -385,11 +374,9 @@ class KeyboardView(context: Context) : View(context) {
                     canvas.drawText(k.label, cx, baseline(tmp, labelPaint), labelPaint)
                 }
                 Kind.SPACE -> {
-                    if (mode != Mode.EMOJI) {
-                        textPaint.color = palette.sub
-                        textPaint.textSize = sp(13f)
-                        canvas.drawText("bitKeys", cx, baseline(tmp, textPaint), textPaint)
-                    }
+                    textPaint.color = palette.sub
+                    textPaint.textSize = sp(13f)
+                    canvas.drawText("bitKeys", cx, baseline(tmp, textPaint), textPaint)
                 }
                 Kind.SHIFT -> Icons.draw(
                     canvas, if (shift == Shift.LOCKED) Icon.SHIFT_LOCK else Icon.SHIFT,
@@ -562,7 +549,7 @@ class KeyboardView(context: Context) : View(context) {
         p.strip?.let { t ->
             when {
                 t.word != null -> listener?.onSuggestion(t.word)
-                t.emoji -> switchMode(if (mode == Mode.EMOJI) Mode.LETTERS else Mode.EMOJI)
+                t.emoji -> listener?.onToolbar(ToolbarAction.EMOJI)
                 t.action != null -> listener?.onToolbar(t.action)
             }
         }
@@ -603,12 +590,4 @@ class KeyboardView(context: Context) : View(context) {
         pressedStrip.clear()
     }
 
-    companion object {
-        private val EMOJI = listOf(
-            "😀", "😂", "🥹", "😍", "😎", "🤔", "😭", "😴",
-            "👍", "👎", "👏", "🙏", "💪", "🤝", "👋", "🫶",
-            "❤️", "🔥", "✨", "🎉", "💯", "✅", "❌", "⚡",
-            "😅", "🙃", "😬", "🤯", "🥳", "😤", "🫠", "💀",
-        )
-    }
 }

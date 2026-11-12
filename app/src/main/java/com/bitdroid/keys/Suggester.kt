@@ -1,20 +1,28 @@
 package com.bitdroid.keys
 
 import android.content.Context
+import android.content.SharedPreferences
 
 /**
  * Tiny on-device word predictor: a built-in list of common English words plus
  * words the user has typed (stored locally, never leaves the device).
  */
-class Suggester(context: Context) {
+class Suggester(private val context: Context) {
 
-    private val store = context.getSharedPreferences("bitkeys_words", Context.MODE_PRIVATE)
+    // Learned words stay in credential-encrypted storage: they are only read or
+    // written once the phone has been unlocked since boot.
+    private var store: SharedPreferences? = null
     private val learned = HashMap<String, Int>()
 
-    init {
-        for ((k, v) in store.all) {
+    private fun ensureLoaded(): SharedPreferences? {
+        store?.let { return it }
+        if (!Storage.isUnlocked(context)) return null
+        val sp = context.getSharedPreferences("bitkeys_words", Context.MODE_PRIVATE)
+        for ((k, v) in sp.all) {
             if (v is Int) learned[k] = v
         }
+        store = sp
+        return sp
     }
 
     /**
@@ -23,6 +31,7 @@ class Suggester(context: Context) {
      */
     fun slots(typed: String): List<String> {
         if (typed.isEmpty()) return emptyList()
+        ensureLoaded()
         val lower = typed.lowercase()
         val candidates = (learned.keys.asSequence() + BASE.asSequence())
             .filter { it.length > lower.length && it.startsWith(lower) }
@@ -45,14 +54,15 @@ class Suggester(context: Context) {
     fun learn(word: String) {
         val w = word.lowercase()
         if (w.length < 2 || w.any { !it.isLetter() && it != '\'' }) return
+        val sp = ensureLoaded() ?: return
         val n = (learned[w] ?: 0) + 1
         learned[w] = n
-        store.edit().putInt(w, n).apply()
+        sp.edit().putInt(w, n).apply()
     }
 
     fun forgetAll() {
         learned.clear()
-        store.edit().clear().apply()
+        ensureLoaded()?.edit()?.clear()?.apply()
     }
 
     companion object {

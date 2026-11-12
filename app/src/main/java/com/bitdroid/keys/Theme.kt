@@ -11,9 +11,10 @@ data class KeyboardPrefs(
     val numberRow: Boolean = false,
     val haptics: Boolean = true,
     val sound: Boolean = false,
+    val autoCaps: Boolean = true,
 ) {
     fun save(context: Context) {
-        context.getSharedPreferences(NAME, Context.MODE_PRIVATE).edit()
+        Storage.prefs(context, NAME).edit()
             .putString("theme", theme)
             .putString("accent", accent)
             .putString("shape", shape)
@@ -21,6 +22,7 @@ data class KeyboardPrefs(
             .putBoolean("number_row", numberRow)
             .putBoolean("haptics", haptics)
             .putBoolean("sound", sound)
+            .putBoolean("auto_caps", autoCaps)
             .apply()
     }
 
@@ -28,7 +30,7 @@ data class KeyboardPrefs(
         const val NAME = "bitkeys"
 
         fun load(context: Context): KeyboardPrefs {
-            val sp = context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
+            val sp = Storage.prefs(context, NAME)
             val d = KeyboardPrefs()
             return KeyboardPrefs(
                 theme = sp.getString("theme", d.theme) ?: d.theme,
@@ -38,6 +40,7 @@ data class KeyboardPrefs(
                 numberRow = sp.getBoolean("number_row", d.numberRow),
                 haptics = sp.getBoolean("haptics", d.haptics),
                 sound = sp.getBoolean("sound", d.sound),
+                autoCaps = sp.getBoolean("auto_caps", d.autoCaps),
             )
         }
     }
