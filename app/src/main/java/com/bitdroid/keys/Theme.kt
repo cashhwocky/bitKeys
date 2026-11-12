@@ -5,7 +5,7 @@ import android.content.Context
 /** User-facing keyboard settings, stored in SharedPreferences. */
 data class KeyboardPrefs(
     val theme: String = "amoled",
-    val accent: String = "mint",
+    val accent: String = "blue",
     val shape: String = "round",
     val borders: Boolean = false,
     val numberRow: Boolean = false,
@@ -16,7 +16,7 @@ data class KeyboardPrefs(
     fun save(context: Context) {
         Storage.prefs(context, NAME).edit()
             .putString("theme", theme)
-            .putString("accent", accent)
+            .putString("accent_color", accent)
             .putString("shape", shape)
             .putBoolean("borders", borders)
             .putBoolean("number_row", numberRow)
@@ -34,7 +34,7 @@ data class KeyboardPrefs(
             val d = KeyboardPrefs()
             return KeyboardPrefs(
                 theme = sp.getString("theme", d.theme) ?: d.theme,
-                accent = sp.getString("accent", d.accent) ?: d.accent,
+                accent = sp.getString("accent_color", d.accent) ?: d.accent,
                 shape = sp.getString("shape", d.shape) ?: d.shape,
                 borders = sp.getBoolean("borders", d.borders),
                 numberRow = sp.getBoolean("number_row", d.numberRow),
@@ -69,8 +69,8 @@ object Themes {
     )
 
     val ACCENTS = listOf(
-        "mint" to "Mint",
         "blue" to "Blue",
+        "mint" to "Mint",
         "coral" to "Coral",
         "lavender" to "Lavender",
         "dynamic" to "Wallpaper",

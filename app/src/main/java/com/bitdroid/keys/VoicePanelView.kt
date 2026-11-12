@@ -107,7 +107,7 @@ class VoicePanelView(context: Context) : View(context) {
     private fun rebuildWaves() {
         waves = listOf(
             Wave(Color.parseColor("#D7BAFF"), 180, 0.55f, 2.0f, dp(3f), 2.6f),
-            Wave(Color.parseColor("#A8C7FA"), 205, 0.75f, -2.7f, dp(4f), 1.3f),
+            Wave(if (palette.accent == Color.parseColor("#A8C7FA")) Color.parseColor("#7FE0C4") else Color.parseColor("#A8C7FA"), 205, 0.75f, -2.7f, dp(4f), 1.3f),
             Wave(palette.accent, 255, 1.0f, 3.9f, dp(5f), 0f),
         )
         applyShaders()
