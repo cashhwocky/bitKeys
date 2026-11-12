@@ -413,8 +413,17 @@ class KeyboardView(context: Context) : View(context) {
         for (row in rows) {
             val first = row.firstOrNull() ?: continue
             if (y < first.rect.top - half || y > first.rect.bottom + half) continue
-            // nearest real key in this row (spacers map to their neighbour)
-            return row.filter { it.kind != Kind.SPACER }.minByOrNull { abs(it.rect.centerX() - x) }
+            // The key whose bounds contain x wins; gaps and spacers go to the key whose
+            // nearest EDGE is closest (not center, or wide keys like space lose their ends).
+            val real = row.filter { it.kind != Kind.SPACER }
+            real.firstOrNull { x >= it.rect.left && x <= it.rect.right }?.let { return it }
+            return real.minByOrNull { k ->
+                when {
+                    x < k.rect.left -> k.rect.left - x
+                    x > k.rect.right -> x - k.rect.right
+                    else -> 0f
+                }
+            }
         }
         return null
     }
