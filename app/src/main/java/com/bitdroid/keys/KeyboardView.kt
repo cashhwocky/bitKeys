@@ -191,7 +191,7 @@ class KeyboardView(context: Context) : View(context) {
             }
             Mode.SYMBOLS -> listOf(
                 chars("1234567890"),
-                chars("@#$_&-+()/"),
+                chars("@#\$_&-+()/"),
                 listOf(Key(Kind.PAGE, "=\\<", 1.5f, mod = true)) + chars("*\"':;!?") + Key(Kind.DELETE, weight = 1.5f, mod = true),
                 bottomRow("ABC"),
             )
