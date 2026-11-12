@@ -90,9 +90,9 @@ class KeyboardView(context: Context) : View(context) {
     private fun sp(v: Float) = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, v, resources.displayMetrics)
 
     private val stripH = dp(48f)
-    private val keyH = dp(50f)
+    private val keyH = dp(54f)
     private val rowGap = dp(8f)
-    private val keyGap = dp(6f)
+    private val keyGap = dp(5f)
     private val sidePad = dp(6f)
     private val topPad = dp(4f)
     private val stripGap = dp(6f)
@@ -359,7 +359,7 @@ class KeyboardView(context: Context) : View(context) {
             when (k.kind) {
                 Kind.CHAR -> {
                     textPaint.color = fg
-                    textPaint.textSize = sp(22f)
+                    textPaint.textSize = sp(23f)
                     val label = if (upper && k.label[0].isLetter()) k.label.uppercase() else k.label
                     canvas.drawText(label, cx, baseline(tmp, textPaint), textPaint)
                     if (k.alt != null) {
