@@ -16,13 +16,12 @@ import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import java.util.Locale
-import kotlin.math.PI
 import kotlin.math.hypot
 import kotlin.math.sin
 
 /**
- * Voice-typing panel: three flowing light ribbons that swell with your voice level,
- * a pulsing pause/resume button, back-to-keyboard and delete-word buttons.
+ * Voice-typing panel in the Material You style: "Listening…" pill, the wavy slider line
+ * as flowing voice waves, rounded-square side buttons and a scalloped pause/mic button.
  */
 class VoicePanelView(context: Context) : View(context) {
 
@@ -57,10 +56,9 @@ class VoicePanelView(context: Context) : View(context) {
     private fun sp(v: Float) = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, v, resources.displayMetrics)
 
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = sp(14f) }
-    private val chipStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = dp(1f) }
+    private val text = Paint(Paint.ANTI_ALIAS_FLAG)
 
-    private class Wave(val color: Int, val alpha: Int, val amp: Float, val speed: Float, val width: Float, val phase: Float) {
+    private class Wave(val color: Int, val alpha: Int, val amp: Float, val waves: Float, val speed: Float, val width: Float, val phase: Float) {
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
             strokeCap = Paint.Cap.ROUND
@@ -106,9 +104,9 @@ class VoicePanelView(context: Context) : View(context) {
 
     private fun rebuildWaves() {
         waves = listOf(
-            Wave(if (palette.accent == Color.parseColor("#D7BAFF")) Color.parseColor("#7FE0C4") else Color.parseColor("#D7BAFF"), 180, 0.55f, 2.0f, dp(3f), 2.6f),
-            Wave(if (palette.accent == Color.parseColor("#A8C7FA")) Color.parseColor("#7FE0C4") else Color.parseColor("#A8C7FA"), 205, 0.75f, -2.7f, dp(4f), 1.3f),
-            Wave(palette.accent, 255, 1.0f, 3.9f, dp(5f), 0f),
+            Wave(palette.accent, 140, 0.72f, 2.2f, 2.1f, dp(4f), 1.2f),
+            Wave(Color.parseColor("#7FE0C4"), 115, 0.52f, 3.1f, -2.8f, dp(3f), 2.4f),
+            Wave(palette.wave, 255, 1.0f, 2.6f, 3.6f, dp(6f), 0f),
         )
         applyShaders()
     }
@@ -129,14 +127,14 @@ class VoicePanelView(context: Context) : View(context) {
             w.paint.strokeWidth = w.width
             w.paint.shader = fadeShader(w.color, w.alpha)
         }
-        glow.strokeWidth = dp(12f)
+        glow.strokeWidth = dp(14f)
         glow.maskFilter = BlurMaskFilter(dp(6f), BlurMaskFilter.Blur.NORMAL)
-        glow.shader = fadeShader(palette.accent, 90)
+        glow.shader = fadeShader(palette.wave, 90)
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val w = MeasureSpec.getSize(widthMeasureSpec)
-        setMeasuredDimension(w, if (fixedHeight > 0) fixedHeight else dp(320f).toInt())
+        setMeasuredDimension(w, if (fixedHeight > 0) fixedHeight else dp(344f).toInt())
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
@@ -144,98 +142,99 @@ class VoicePanelView(context: Context) : View(context) {
         applyShaders()
     }
 
+    private fun drawPill(canvas: Canvas, r: RectF) {
+        fill.color = palette.strip
+        canvas.drawRoundRect(r, r.height() / 2, r.height() / 2, fill)
+    }
+
     override fun onDraw(canvas: Canvas) {
-        canvas.drawColor(palette.bg)
         val w = width.toFloat()
-        val pad = dp(16f)
+        val sheet = dp(28f)
+        fill.color = palette.bg
+        canvas.drawRoundRect(0f, 0f, w, height + sheet, sheet, sheet, fill)
+
+        val pad = dp(18f)
         val t = SystemClock.uptimeMillis() / 1000f
         level += (targetLevel - level) * 0.18f
 
-        // --- header: status + language chip
-        val headerY = dp(28f)
-        fill.color = palette.accent
-        canvas.drawCircle(pad + dp(4f), headerY, dp(4f), fill)
-        text.color = palette.sub
+        // --- header pills
         text.textSize = sp(14f)
         text.typeface = Typeface.DEFAULT
+        val pillH = dp(34f)
+        val top = dp(14f)
+        val statusW = text.measureText(status) + dp(44f)
+        val statusPill = RectF(pad, top, pad + statusW, top + pillH)
+        drawPill(canvas, statusPill)
+        fill.color = palette.wave
+        canvas.drawCircle(statusPill.left + dp(18f), statusPill.centerY(), dp(4f), fill)
+        text.color = palette.text
         text.textAlign = Paint.Align.LEFT
-        canvas.drawText(status, pad + dp(16f), headerY - (text.descent() + text.ascent()) / 2f, text)
+        canvas.drawText(status, statusPill.left + dp(30f), statusPill.centerY() - (text.descent() + text.ascent()) / 2f, text)
 
-        text.textSize = sp(13f)
-        val chipW = text.measureText(language) + dp(24f)
-        val chip = RectF(w - pad - chipW, headerY - dp(16f), w - pad, headerY + dp(16f))
-        chipStroke.color = palette.border
-        canvas.drawRoundRect(chip, dp(16f), dp(16f), chipStroke)
+        val langW = text.measureText(language) + dp(28f)
+        val langPill = RectF(w - pad - langW, top, w - pad, top + pillH)
+        drawPill(canvas, langPill)
+        text.color = palette.sub
         text.textAlign = Paint.Align.CENTER
-        canvas.drawText(language, chip.centerX(), headerY - (text.descent() + text.ascent()) / 2f, text)
+        canvas.drawText(language, langPill.centerX(), langPill.centerY() - (text.descent() + text.ascent()) / 2f, text)
 
-        // --- bottom controls layout
-        val gestureSpace = dp(16f) + bottomInset
-        val btnCy = height - gestureSpace - dp(42f)
-        val big = dp(42f)
-        val small = dp(28f)
+        // --- bottom controls
+        val btnCy = height - bottomInset - dp(26f) - dp(52f)
+        val big = dp(52f)
+        val side = dp(29f)
         mainBtn.set(w / 2 - big, btnCy - big, w / 2 + big, btnCy + big)
-        keyboardBtn.set(pad, btnCy - small, pad + small * 2, btnCy + small)
-        deleteBtn.set(w - pad - small * 2, btnCy - small, w - pad, btnCy + small)
+        keyboardBtn.set(pad, btnCy - side, pad + side * 2, btnCy + side)
+        deleteBtn.set(w - pad - side * 2, btnCy - side, w - pad, btnCy + side)
 
-        // --- ribbons, centered between header and buttons
-        val ribbonTop = headerY + dp(20f)
-        val ribbonBottom = mainBtn.top - dp(12f)
+        // --- waves between header and buttons
+        val ribbonTop = statusPill.bottom + dp(8f)
+        val ribbonBottom = mainBtn.top - dp(4f)
         val cy = (ribbonTop + ribbonBottom) / 2f
         val maxAmp = (ribbonBottom - ribbonTop) / 2f - dp(8f)
-        val breathe = 0.78f + 0.22f * sin(t * 2.6f)
-        val baseAmp = if (listening) dp(10f) + level * (maxAmp - dp(10f)) else dp(3f)
-        val k = (2 * PI / dp(195f)).toFloat()
+        val breathe = 0.8f + 0.2f * sin(t * 2.6f)
+        val baseAmp = if (listening) dp(12f) + level * (maxAmp - dp(12f)) else dp(4f)
         for ((idx, wave) in waves.withIndex()) {
-            val amp = baseAmp * wave.amp * if (listening) breathe else 1f
-            buildWave(w, cy, amp, k, t * wave.speed + wave.phase)
+            val amp = (baseAmp * wave.amp * (if (listening) breathe else 1f)).coerceAtMost(maxAmp)
+            val phase = if (listening) t * wave.speed + wave.phase else wave.phase
+            Shapes.squiggle(path, 0f, w, cy, amp, wave.waves * w / dp(412f), phase)
             if (idx == waves.lastIndex) canvas.drawPath(path, glow)
             canvas.drawPath(path, wave.paint)
         }
 
-        // --- buttons
-        drawRoundButton(canvas, keyboardBtn, palette.key, Icon.KEYBOARD, palette.text)
-        drawRoundButton(canvas, deleteBtn, palette.key, Icon.DELETE, palette.text)
+        // --- buttons: rounded squares + scalloped center
+        drawSquareButton(canvas, keyboardBtn, Icon.KEYBOARD)
+        drawSquareButton(canvas, deleteBtn, Icon.DELETE)
 
         if (listening) {
             val f = (t % 1.8f) / 1.8f
-            fill.color = palette.accent
-            fill.alpha = ((1f - f) * 115).toInt()
-            canvas.drawCircle(mainBtn.centerX(), mainBtn.centerY(), big * (1f + 0.7f * f), fill)
+            fill.color = palette.mod
+            fill.alpha = ((1f - f) * 90).toInt()
+            Shapes.drawCookie(canvas, mainBtn.centerX(), mainBtn.centerY(), big * (1f + 0.45f * f), fill, lobes = 12, amp = 0.07f)
             fill.alpha = 255
         }
-        fill.color = palette.accent
-        val s = if (pressed === mainBtn) 0.94f else 1f
-        canvas.drawCircle(mainBtn.centerX(), mainBtn.centerY(), big * s, fill)
+        fill.color = palette.mod
+        val s = if (pressed === mainBtn) 0.93f else 1f
+        val spin = if (listening) (t * 12f) % 360f else 0f
+        canvas.save()
+        canvas.rotate(spin, mainBtn.centerX(), mainBtn.centerY())
+        Shapes.drawCookie(canvas, mainBtn.centerX(), mainBtn.centerY(), big * s, fill, lobes = 12, amp = 0.07f)
+        canvas.restore()
         Icons.draw(
             canvas, if (listening) Icon.PAUSE else Icon.MIC,
-            mainBtn.centerX(), mainBtn.centerY(), dp(30f), palette.onAccent,
-            filled = false, weight = 2f,
+            mainBtn.centerX(), mainBtn.centerY(), dp(32f), palette.onMod, weight = 2.2f,
         )
 
-        // gesture handle spacing is left empty; keep animating while visible
         if (isShown) postInvalidateOnAnimation()
     }
 
-    private fun buildWave(w: Float, cy: Float, amp: Float, k: Float, phase: Float) {
-        path.reset()
-        val step = dp(4f)
-        var x = 0f
-        path.moveTo(0f, cy + amp * sin(phase))
-        while (x <= w) {
-            x += step
-            path.lineTo(x, cy + amp * sin(k * x + phase))
-        }
-    }
-
-    private fun drawRoundButton(canvas: Canvas, r: RectF, bg: Int, icon: Icon, fg: Int) {
-        fill.color = if (pressed === r) palette.pressed else bg
-        canvas.drawCircle(r.centerX(), r.centerY(), r.width() / 2, fill)
-        Icons.draw(canvas, icon, r.centerX(), r.centerY(), dp(24f), fg)
+    private fun drawSquareButton(canvas: Canvas, r: RectF, icon: Icon) {
+        fill.color = if (pressed === r) palette.pressed else palette.key
+        canvas.drawRoundRect(r, dp(22f), dp(22f), fill)
+        Icons.draw(canvas, icon, r.centerX(), r.centerY(), dp(25f), palette.text, weight = 1.9f)
     }
 
     private fun hit(x: Float, y: Float): RectF? = listOf(mainBtn, keyboardBtn, deleteBtn).firstOrNull {
-        hypot(x - it.centerX(), y - it.centerY()) <= it.width() / 2 + dp(6f)
+        hypot(x - it.centerX(), y - it.centerY()) <= it.width() / 2 + dp(8f)
     }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {

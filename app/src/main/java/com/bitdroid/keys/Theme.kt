@@ -4,7 +4,7 @@ import android.content.Context
 
 /** User-facing keyboard settings, stored in SharedPreferences. */
 data class KeyboardPrefs(
-    val theme: String = "amoled",
+    val theme: String = "tonal",
     val accent: String = "lilac",
     val shape: String = "square",
     val borders: Boolean = false,
@@ -17,7 +17,7 @@ data class KeyboardPrefs(
 ) {
     fun save(context: Context) {
         Storage.prefs(context, NAME).edit()
-            .putString("theme", theme)
+            .putString("theme_v2", theme)
             .putString("accent_v3", accent)
             .putString("shape_v2", shape)
             .putBoolean("borders", borders)
@@ -37,7 +37,7 @@ data class KeyboardPrefs(
             val sp = Storage.prefs(context, NAME)
             val d = KeyboardPrefs()
             return KeyboardPrefs(
-                theme = sp.getString("theme", d.theme) ?: d.theme,
+                theme = sp.getString("theme_v2", d.theme) ?: d.theme,
                 accent = sp.getString("accent_v3", d.accent) ?: d.accent,
                 shape = sp.getString("shape_v2", d.shape) ?: d.shape,
                 borders = sp.getBoolean("borders", d.borders),
@@ -54,26 +54,36 @@ data class KeyboardPrefs(
 
 /** Resolved colors for drawing the keyboard. */
 data class Palette(
-    val bg: Int,
-    val key: Int,
-    val mod: Int,
-    val text: Int,
-    val sub: Int,
+    val bg: Int,        // keyboard sheet
+    val key: Int,       // letter keys
+    val mod: Int,       // modifier keys (shift, delete, ?123, , .)
+    val onMod: Int,     // text/icons on modifier keys
+    val text: Int,      // text on letter keys
+    val sub: Int,       // secondary text
     val pressed: Int,
     val border: Int,
-    val accent: Int,
+    val accent: Int,    // Enter "cookie"
     val onAccent: Int,
+    val strip: Int,     // suggestion-bar pill
+    val tool: Int,      // toolbar squircles
+    val onTool: Int,
+    val micBg: Int,
+    val micFg: Int,
+    val wave: Int,      // wavy line on the space bar / voice ribbon
     val isLight: Boolean,
 )
 
 object Themes {
     val THEMES = listOf(
+        "tonal" to "Tonal",
+        "lavender" to "Lavender",
+        "dynamic" to "Wallpaper colors",
         "amoled" to "AMOLED",
         "graphite" to "Graphite",
         "light" to "Light",
-        "dynamic" to "Wallpaper colors",
     )
 
+    /** "lilac" means each theme's own native lilac. */
     val ACCENTS = listOf(
         "lilac" to "Lilac",
         "blue" to "Blue",
@@ -89,51 +99,85 @@ object Themes {
     )
 
     private fun c(v: Long): Int = v.toInt()
+    private val BLACK = 0xFF000000.toInt()
+    private val WHITE = 0xFFFFFFFF.toInt()
 
     fun accentColor(context: Context, id: String): Int = when (id) {
         "blue" -> c(0xFFA8C7FA)
         "coral" -> c(0xFFFFB4A8)
-        "lilac", "lavender" -> c(0xFFD7BAFF)
+        "mint" -> c(0xFF7FE0C4)
         "dynamic" -> context.getColor(android.R.color.system_accent1_200)
-        else -> c(0xFF7FE0C4)
+        else -> c(0xFFB9A7F0) // lilac
     }
 
     fun palette(context: Context, prefs: KeyboardPrefs): Palette =
         palette(context, prefs.theme, prefs.accent)
 
     fun palette(context: Context, themeId: String, accentId: String): Palette {
-        val accent = accentColor(context, accentId)
-        val onAccent = c(0xFF000000)
-        return when (themeId) {
-            "graphite" -> Palette(
-                bg = c(0xFF1A1A1D), key = c(0xFF323238), mod = c(0xFF45454C),
-                text = c(0xFFF2F2F5), sub = c(0xFFB0B0B8), pressed = c(0xFF5A5A62),
-                border = c(0xFF55555C), accent = accent, onAccent = onAccent, isLight = false,
-            )
-            "light" -> Palette(
-                bg = c(0xFFE9E9EE), key = c(0xFFFFFFFF), mod = c(0xFFC9C9D1),
-                text = c(0xFF1B1B1F), sub = c(0xFF55555D), pressed = c(0xFFD2D2DA),
-                border = c(0xFFB4B4BD), accent = accent, onAccent = onAccent, isLight = true,
+        fun sys(id: Int) = context.getColor(id)
+        val base = when (themeId) {
+            "lavender" -> Palette(
+                bg = c(0xFFE7DDF8), key = c(0xFFFBF8FF), mod = c(0xFFCDBDF2), onMod = c(0xFF2B2342),
+                text = c(0xFF2B2342), sub = c(0xFF6C6283), pressed = c(0xFFD9CCF5), border = c(0xFFC2B5DD),
+                accent = c(0xFF5B4BA8), onAccent = WHITE, strip = c(0xFFF4EEFF),
+                tool = c(0xFF5B4BA8), onTool = c(0xFFECE4FF), micBg = c(0xFF5B4BA8), micFg = WHITE,
+                wave = c(0xFF8B78D6), isLight = true,
             )
             "dynamic" -> Palette(
-                bg = context.getColor(android.R.color.system_neutral1_900),
-                key = context.getColor(android.R.color.system_neutral2_800),
-                mod = context.getColor(android.R.color.system_neutral2_700),
-                text = context.getColor(android.R.color.system_neutral1_50),
-                sub = context.getColor(android.R.color.system_neutral2_300),
-                pressed = context.getColor(android.R.color.system_neutral2_600),
-                border = context.getColor(android.R.color.system_neutral2_600),
-                accent = accent, onAccent = onAccent, isLight = false,
+                bg = sys(android.R.color.system_neutral1_900),
+                key = sys(android.R.color.system_neutral2_800),
+                mod = sys(android.R.color.system_accent1_200),
+                onMod = sys(android.R.color.system_accent1_900),
+                text = sys(android.R.color.system_neutral1_50),
+                sub = sys(android.R.color.system_neutral2_300),
+                pressed = sys(android.R.color.system_neutral2_600),
+                border = sys(android.R.color.system_neutral2_600),
+                accent = sys(android.R.color.system_accent1_300),
+                onAccent = sys(android.R.color.system_accent1_900),
+                strip = sys(android.R.color.system_neutral2_800),
+                tool = sys(android.R.color.system_accent1_700),
+                onTool = sys(android.R.color.system_accent1_100),
+                micBg = sys(android.R.color.system_accent1_200),
+                micFg = sys(android.R.color.system_accent1_900),
+                wave = sys(android.R.color.system_accent3_200),
+                isLight = false,
             )
-            else -> Palette( // AMOLED (default)
-                bg = c(0xFF000000), key = c(0xFF1C1C1E), mod = c(0xFF2C2C31),
-                text = c(0xFFF2F2F5), sub = c(0xFFA0A0A8), pressed = c(0xFF3A3A40),
-                border = c(0xFF3A3A40), accent = accent, onAccent = onAccent, isLight = false,
+            "amoled" -> Palette(
+                bg = BLACK, key = c(0xFF1C1C1E), mod = c(0xFF2C2C31), onMod = c(0xFFF2F2F5),
+                text = c(0xFFF2F2F5), sub = c(0xFFA0A0A8), pressed = c(0xFF3A3A40), border = c(0xFF3A3A40),
+                accent = c(0xFFD7BAFF), onAccent = BLACK, strip = c(0xFF121214),
+                tool = c(0xFF1C1C1E), onTool = c(0xFFC8C8CE), micBg = c(0xFF1C1C1E), micFg = c(0xFFD7BAFF),
+                wave = c(0xFFD7BAFF), isLight = false,
+            )
+            "graphite" -> Palette(
+                bg = c(0xFF1A1A1D), key = c(0xFF323238), mod = c(0xFF45454C), onMod = c(0xFFF2F2F5),
+                text = c(0xFFF2F2F5), sub = c(0xFFB0B0B8), pressed = c(0xFF5A5A62), border = c(0xFF55555C),
+                accent = c(0xFFD7BAFF), onAccent = BLACK, strip = c(0xFF26262A),
+                tool = c(0xFF323238), onTool = c(0xFFD0D0D6), micBg = c(0xFF323238), micFg = c(0xFFD7BAFF),
+                wave = c(0xFFD7BAFF), isLight = false,
+            )
+            "light" -> Palette(
+                bg = c(0xFFE9E9EE), key = WHITE, mod = c(0xFFC9C9D1), onMod = c(0xFF1B1B1F),
+                text = c(0xFF1B1B1F), sub = c(0xFF55555D), pressed = c(0xFFD2D2DA), border = c(0xFFB4B4BD),
+                accent = c(0xFF5B4BA8), onAccent = WHITE, strip = c(0xFFF6F6F9),
+                tool = c(0xFFDCDCE2), onTool = c(0xFF2A2A30), micBg = c(0xFF5B4BA8), micFg = WHITE,
+                wave = c(0xFF8B78D6), isLight = true,
+            )
+            else -> Palette( // Tonal (default) — plum keys, lavender modifiers
+                bg = c(0xFF261F30), key = c(0xFF3D3550), mod = c(0xFFD2C4F0), onMod = c(0xFF2C2442),
+                text = c(0xFFEFE7FB), sub = c(0xFFB8AECB), pressed = c(0xFF544A69), border = c(0xFF544A69),
+                accent = c(0xFFB9A7F0), onAccent = c(0xFF221A33), strip = c(0xFF322A3F),
+                tool = c(0xFF4D3F96), onTool = c(0xFFD9CCFF), micBg = c(0xFFD2C4F0), micFg = c(0xFF2C2442),
+                wave = c(0xFFF2C6EA), isLight = false,
             )
         }
+        // A non-lilac accent recolors the Enter key, mic and wavy line.
+        if (accentId == "lilac") return base
+        val a = accentColor(context, accentId)
+        return base.copy(accent = a, onAccent = BLACK, micBg = a, micFg = BLACK, wave = a)
     }
 
-    /** Corner radius in dp for normal keys. Wide keys (space, enter, mode) are always pills except in square mode. */
+    /** Corner radius in dp for keys. */
     fun keyRadiusDp(shape: String): Float = when (shape) {
         "pill" -> 100f
         "square" -> 6f

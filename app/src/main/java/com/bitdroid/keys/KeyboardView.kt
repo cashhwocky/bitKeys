@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.media.AudioManager
@@ -89,7 +90,7 @@ class KeyboardView(context: Context) : View(context) {
     private fun dp(v: Float) = v * density
     private fun sp(v: Float) = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, v, resources.displayMetrics)
 
-    private val stripH = dp(48f)
+    private val stripH = dp(52f)
     private val keyH = dp(54f)
     private val rowGap = dp(8f)
     private val keyGap = dp(5f)
@@ -257,32 +258,37 @@ class KeyboardView(context: Context) : View(context) {
         }
     }
 
+    private val stripPill = RectF()
+    private var slotLeft = 0f
+    private var slotW = 0f
+
     private fun layoutStrip() {
         strip.clear()
         if (width == 0) return
-        val top = topPad
-        val size = dp(44f)
-        val cy = top + stripH / 2f
-        val micRight = width - sidePad
-        strip.add(StripTarget(RectF(micRight - size, cy - size / 2, micRight, cy + size / 2), action = ToolbarAction.MIC))
+        stripPill.set(sidePad, topPad, width - sidePad, topPad + stripH)
+        val cy = stripPill.centerY()
+        val mic = dp(42f)
+        val micRight = stripPill.right - dp(5f)
+        strip.add(StripTarget(RectF(micRight - mic, cy - mic / 2, micRight, cy + mic / 2), action = ToolbarAction.MIC))
 
         if (slots.isEmpty()) {
+            val tool = dp(40f)
             val icons = listOf<Pair<ToolbarAction?, Boolean>>(
-                null to true, // emoji toggle
+                null to true, // emoji panel
                 ToolbarAction.CLIPBOARD to false,
                 ToolbarAction.SETTINGS to false,
             )
             icons.forEachIndexed { i, (action, isEmoji) ->
-                val left = sidePad + i * (size + dp(4f))
-                strip.add(StripTarget(RectF(left, cy - size / 2, left + size, cy + size / 2), action = action, emoji = isEmoji))
+                val left = stripPill.left + dp(6f) + i * (tool + dp(6f))
+                strip.add(StripTarget(RectF(left, cy - tool / 2, left + tool, cy + tool / 2), action = action, emoji = isEmoji))
             }
         } else {
-            val left = sidePad
-            val right = micRight - size - dp(4f)
-            val slotW = (right - left) / 3f
+            slotLeft = stripPill.left + dp(8f)
+            val right = micRight - mic - dp(6f)
+            slotW = (right - slotLeft) / 3f
             slots.forEachIndexed { i, word ->
                 if (word.isNotEmpty()) {
-                    val l = left + i * slotW
+                    val l = slotLeft + i * slotW
                     strip.add(StripTarget(RectF(l, cy - dp(20f), l + slotW, cy + dp(20f)), word = word, slot = i))
                 }
             }
@@ -291,56 +297,72 @@ class KeyboardView(context: Context) : View(context) {
 
     // ---------------------------------------------------------------- drawing
 
+    private val sheetRadius = dp(28f)
+    private val wavePath = Path()
+    private val wavePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
+
     override fun onDraw(canvas: Canvas) {
-        canvas.drawColor(palette.bg)
+        // Sheet with soft top corners, like the home-screen widgets.
+        fillPaint.color = palette.bg
+        canvas.drawRoundRect(0f, 0f, width.toFloat(), height + sheetRadius, sheetRadius, sheetRadius, fillPaint)
         drawStrip(canvas)
         drawKeys(canvas)
     }
 
     private fun drawStrip(canvas: Canvas) {
-        val iconSize = dp(22f)
-        if (slots.isNotEmpty()) {
-            // thin dividers between the three slots
-            val first = strip.firstOrNull { it.word != null }
-            if (first != null) {
-                val left = sidePad
-                val right = width - sidePad - dp(48f)
-                val slotW = (right - left) / 3f
-                fillPaint.color = palette.sub
-                fillPaint.alpha = 70
-                for (i in 1..2) {
-                    val x = left + i * slotW
-                    canvas.drawRect(x - dp(0.5f), first.rect.centerY() - dp(10f), x + dp(0.5f), first.rect.centerY() + dp(10f), fillPaint)
-                }
-                fillPaint.alpha = 255
+        fillPaint.color = palette.strip
+        canvas.drawRoundRect(stripPill, stripPill.height() / 2, stripPill.height() / 2, fillPaint)
+
+        if (slots.isNotEmpty() && strip.any { it.word != null }) {
+            fillPaint.color = palette.text
+            fillPaint.alpha = 90
+            val cy = stripPill.centerY()
+            for (i in 1..2) {
+                val x = slotLeft + i * slotW
+                canvas.drawRect(x - dp(0.5f), cy - dp(11f), x + dp(0.5f), cy + dp(11f), fillPaint)
             }
+            fillPaint.alpha = 255
         }
+        val iconSize = dp(21f)
         for (t in strip) {
             val r = t.rect
-            if (t in pressedStrip) {
-                fillPaint.color = palette.pressed
-                canvas.drawRoundRect(r, r.height() / 2, r.height() / 2, fillPaint)
-            }
+            val pressed = t in pressedStrip
             when {
                 t.word != null -> {
+                    if (pressed) {
+                        fillPaint.color = palette.pressed
+                        canvas.drawRoundRect(r, r.height() / 2, r.height() / 2, fillPaint)
+                    }
                     val best = t.slot == 1
                     textPaint.color = palette.text
                     textPaint.textSize = sp(16f)
-                    textPaint.typeface = if (best) Typeface.create(Typeface.DEFAULT, 600, false) else Typeface.DEFAULT
+                    textPaint.typeface = if (best) Typeface.create(Typeface.DEFAULT, 700, false) else Typeface.DEFAULT
                     val label = ellipsize(t.word, textPaint, r.width() - dp(8f))
                     canvas.drawText(label, r.centerX(), baseline(r, textPaint), textPaint)
                     textPaint.typeface = Typeface.DEFAULT
                 }
                 t.action == ToolbarAction.MIC -> {
-                    if (t !in pressedStrip) {
-                        fillPaint.color = palette.key
-                        canvas.drawRoundRect(r, r.height() / 2, r.height() / 2, fillPaint)
-                    }
-                    Icons.draw(canvas, Icon.MIC, r.centerX(), r.centerY(), iconSize, palette.accent, weight = 1.9f)
+                    fillPaint.color = palette.micBg
+                    canvas.drawCircle(r.centerX(), r.centerY(), r.width() / 2 * if (pressed) 0.92f else 1f, fillPaint)
+                    Icons.draw(canvas, Icon.MIC, r.centerX(), r.centerY(), dp(22f), palette.micFg, weight = 2f)
                 }
-                t.emoji -> Icons.draw(canvas, Icon.EMOJI, r.centerX(), r.centerY(), iconSize, palette.sub)
-                t.action == ToolbarAction.CLIPBOARD -> Icons.draw(canvas, Icon.CLIPBOARD, r.centerX(), r.centerY(), iconSize, palette.sub)
-                t.action == ToolbarAction.SETTINGS -> Icons.draw(canvas, Icon.SETTINGS, r.centerX(), r.centerY(), iconSize, palette.sub)
+                else -> {
+                    // toolbar squircles, like the app icons
+                    fillPaint.color = palette.tool
+                    tmp.set(r)
+                    if (pressed) tmp.inset(dp(1.5f), dp(1.5f))
+                    canvas.drawRoundRect(tmp, dp(14f), dp(14f), fillPaint)
+                    val icon = when {
+                        t.emoji -> Icon.EMOJI
+                        t.action == ToolbarAction.CLIPBOARD -> Icon.CLIPBOARD
+                        else -> Icon.SETTINGS
+                    }
+                    Icons.draw(canvas, icon, r.centerX(), r.centerY(), if (icon == Icon.EMOJI) iconSize else dp(20f), palette.onTool, weight = 2f)
+                }
             }
         }
     }
@@ -353,32 +375,43 @@ class KeyboardView(context: Context) : View(context) {
             if (k.kind == Kind.SPACER) continue
             val pressed = k in pressedKeys
             tmp.set(k.rect)
-            if (pressed) tmp.inset(dp(1.5f), dp(1.5f))
+            val cx = tmp.centerX()
+            val cy = tmp.centerY()
 
-            val accentKey = k.kind == Kind.ENTER || (k.kind == Kind.SHIFT && shift != Shift.OFF)
+            if (k.kind == Kind.ENTER) {
+                // Scalloped "cookie" Enter, like the date widget.
+                val radius = min(tmp.height() / 2f + dp(4f), tmp.width() / 2f) * if (pressed) 0.9f else 1f
+                fillPaint.color = palette.accent
+                Shapes.drawCookie(canvas, cx, cy, radius, fillPaint)
+                val icon = when (enterStyle) {
+                    EnterStyle.SEARCH -> Icon.SEARCH
+                    EnterStyle.DONE -> Icon.DONE
+                    EnterStyle.ENTER -> Icon.NEWLINE
+                    else -> Icon.ARROW
+                }
+                Icons.draw(canvas, icon, cx, cy, dp(23f), palette.onAccent, weight = 2.4f)
+                continue
+            }
+
+            if (pressed) tmp.inset(dp(1.5f), dp(1.5f))
+            val isMod = k.mod || k.kind == Kind.SHIFT || k.kind == Kind.DELETE
             val bg = when {
-                accentKey -> palette.accent
+                pressed && isMod -> blend(palette.mod, palette.onMod, 0.18f)
                 pressed -> palette.pressed
-                k.mod -> palette.mod
+                isMod -> palette.mod
                 else -> palette.key
             }
-            val wide = k.kind == Kind.SPACE || k.kind == Kind.ENTER || k.kind == Kind.MODE || k.kind == Kind.ABC || k.kind == Kind.NUMPAD
+            val wide = k.kind == Kind.SPACE || k.kind == Kind.MODE || k.kind == Kind.ABC || k.kind == Kind.NUMPAD
             val r = if (wide && !square) tmp.height() / 2 else min(baseRadius, min(tmp.width(), tmp.height()) / 2)
 
             fillPaint.color = bg
             canvas.drawRoundRect(tmp, r, r, fillPaint)
-            if (accentKey && pressed) {
-                fillPaint.color = Color.argb(60, 0, 0, 0)
-                canvas.drawRoundRect(tmp, r, r, fillPaint)
-            }
-            if (prefs.borders && !accentKey) {
+            if (prefs.borders) {
                 borderPaint.color = palette.border
                 canvas.drawRoundRect(tmp, r, r, borderPaint)
             }
 
-            val cx = tmp.centerX()
-            val cy = tmp.centerY()
-            val fg = if (accentKey) palette.onAccent else palette.text
+            val fg = if (isMod) palette.onMod else palette.text
             when (k.kind) {
                 Kind.CHAR -> {
                     textPaint.color = fg
@@ -397,28 +430,28 @@ class KeyboardView(context: Context) : View(context) {
                     canvas.drawText(k.label, cx, baseline(tmp, labelPaint), labelPaint)
                 }
                 Kind.SPACE -> {
-                    textPaint.color = palette.sub
-                    textPaint.textSize = sp(13f)
-                    canvas.drawText("bitKeys", cx, baseline(tmp, textPaint), textPaint)
+                    // The wavy line from the volume slider.
+                    val inset = tmp.width() * 0.09f
+                    Shapes.squiggle(wavePath, tmp.left + inset, tmp.right - inset, cy, dp(4f), 4f)
+                    wavePaint.color = palette.wave
+                    wavePaint.strokeWidth = dp(3f)
+                    canvas.drawPath(wavePath, wavePaint)
                 }
                 Kind.SHIFT -> Icons.draw(
                     canvas, if (shift == Shift.LOCKED) Icon.SHIFT_LOCK else Icon.SHIFT,
-                    cx, cy, dp(22f), fg, filled = shift != Shift.OFF,
+                    cx, cy, dp(23f), fg, filled = shift != Shift.OFF,
                 )
-                Kind.DELETE -> Icons.draw(canvas, Icon.DELETE, cx, cy, dp(24f), fg)
-                Kind.ENTER -> {
-                    val icon = when (enterStyle) {
-                        EnterStyle.SEARCH -> Icon.SEARCH
-                        EnterStyle.DONE -> Icon.DONE
-                        EnterStyle.ENTER -> Icon.NEWLINE
-                        else -> Icon.ARROW
-                    }
-                    Icons.draw(canvas, icon, cx, cy, dp(22f), fg, weight = 2.2f)
-                }
-                Kind.SPACER -> Unit
+                Kind.DELETE -> Icons.draw(canvas, Icon.DELETE, cx, cy, dp(25f), fg, weight = 1.9f)
+                Kind.ENTER, Kind.SPACER -> Unit
             }
         }
     }
+
+    private fun blend(a: Int, b: Int, t: Float): Int = Color.rgb(
+        (Color.red(a) + (Color.red(b) - Color.red(a)) * t).toInt(),
+        (Color.green(a) + (Color.green(b) - Color.green(a)) * t).toInt(),
+        (Color.blue(a) + (Color.blue(b) - Color.blue(a)) * t).toInt(),
+    )
 
     private fun baseline(r: RectF, p: Paint) = r.centerY() - (p.descent() + p.ascent()) / 2f
 

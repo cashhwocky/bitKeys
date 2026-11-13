@@ -4,7 +4,7 @@ bitDroid's Keyboard App. It's a rounded-key keyboard that defaults to AMOLED bla
 
 ## Features
 
-- **Rounded keys on true black.** Pill-shaped space, mode and enter keys. Themes: **AMOLED** (default), Graphite, Light and Wallpaper colors (Material You).
+- **Material You look.** Matches Pixel's expressive home screen: plum keys with lavender modifier keys, a pill-shaped suggestion bar with a round mic, squircle toolbar buttons, a scalloped Enter key and a wavy line on the space bar. Themes: **Tonal** (default), Lavender (light), Wallpaper colors (pulls the same tones from your wallpaper), AMOLED, Graphite and Light.
 - **Accent colors.** Lilac (default), Blue, Mint, Coral, Lavender, or your wallpaper's accent.
 - **Key shapes.** Square (default), Rounded or Pill. Optional key borders and number row.
 - **Voice typing.** Three light ribbons swell with your voice. Dictation runs continuously, with live partial results, pause/resume and delete-last-word. It uses the on-device recognizer when the phone has one (Android 13+).

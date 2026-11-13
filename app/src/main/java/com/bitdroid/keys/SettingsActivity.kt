@@ -176,7 +176,7 @@ class SettingsActivity : Activity() {
                     setPadding(dpi(4f), dpi(8f), 0, dpi(14f))
                 }
                 label.addView(text(name, 14f, TEXT, medium = true))
-                if (id == "amoled") {
+                if (id == "tonal") {
                     label.addView(text("Default", 11f, BLACK, bold = true).apply {
                         background = rounded(accent, dp(8f))
                         setPadding(dpi(7f), dpi(2f), dpi(7f), dpi(2f))

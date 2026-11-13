@@ -62,11 +62,12 @@ class ThemePreviewView(context: Context) : View(context) {
         val off = kw / 2
         for (i in 0 until 9) key(r.left + padX + off + i * (kw + gap), kw, p.key)
         y += keyH + rowGap
-        // row 3: mode, space, enter
+        // row 3: mode, space, scalloped enter
         val unit = (innerW - 2 * gap) / 8f
         key(r.left + padX, unit * 1.5f, p.mod, pill = true)
         key(r.left + padX + unit * 1.5f + gap, unit * 5f, p.key, pill = true)
         kw = unit * 1.5f
-        key(r.right - padX - kw, kw, p.accent, pill = true)
+        fill.color = p.accent
+        Shapes.drawCookie(canvas, r.right - padX - kw / 2f, y + keyH / 2f, keyH / 2f + 2 * d, fill)
     }
 }

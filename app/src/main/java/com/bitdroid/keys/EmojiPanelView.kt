@@ -236,7 +236,8 @@ class EmojiPanelView(context: Context) : View(context) {
     }
 
     override fun onDraw(canvas: Canvas) {
-        canvas.drawColor(palette.bg)
+        fill.color = palette.bg
+        canvas.drawRoundRect(0f, 0f, width.toFloat(), height + dp(28f), dp(28f), dp(28f), fill)
         val top = gridTop()
         val bottom = gridBottom()
 
@@ -300,7 +301,7 @@ class EmojiPanelView(context: Context) : View(context) {
         // bottom bar
         val square = shape == "square"
         drawButton(canvas, abcBtn, palette.mod, if (square) dp(6f) else abcBtn.height() / 2)
-        textPaint.color = palette.text
+        textPaint.color = palette.onMod
         textPaint.textSize = sp(15f)
         textPaint.textAlign = Paint.Align.CENTER
         canvas.drawText("ABC", abcBtn.centerX(), abcBtn.centerY() - (textPaint.descent() + textPaint.ascent()) / 2f, textPaint)
@@ -310,7 +311,7 @@ class EmojiPanelView(context: Context) : View(context) {
         canvas.drawText("space", spaceBtn.centerX(), spaceBtn.centerY() - (textPaint.descent() + textPaint.ascent()) / 2f, textPaint)
         textPaint.textAlign = Paint.Align.LEFT
         drawButton(canvas, deleteBtn, palette.mod, min(dp(Themes.keyRadiusDp(shape)), deleteBtn.height() / 2))
-        Icons.draw(canvas, Icon.DELETE, deleteBtn.centerX(), deleteBtn.centerY(), dp(24f), palette.text)
+        Icons.draw(canvas, Icon.DELETE, deleteBtn.centerX(), deleteBtn.centerY(), dp(24f), palette.onMod)
 
         // skin-tone popup
         popup?.let { p ->
