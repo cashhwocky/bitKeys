@@ -5,26 +5,28 @@ import android.content.Context
 /** User-facing keyboard settings, stored in SharedPreferences. */
 data class KeyboardPrefs(
     val theme: String = "amoled",
-    val accent: String = "blue",
-    val shape: String = "round",
+    val accent: String = "lilac",
+    val shape: String = "square",
     val borders: Boolean = false,
     val numberRow: Boolean = false,
     val haptics: Boolean = true,
     val sound: Boolean = false,
     val autoCaps: Boolean = true,
     val numpad: Boolean = true,
+    val autocorrect: Boolean = true,
 ) {
     fun save(context: Context) {
         Storage.prefs(context, NAME).edit()
             .putString("theme", theme)
-            .putString("accent_color", accent)
-            .putString("shape", shape)
+            .putString("accent_v3", accent)
+            .putString("shape_v2", shape)
             .putBoolean("borders", borders)
             .putBoolean("number_row", numberRow)
             .putBoolean("haptics", haptics)
             .putBoolean("sound", sound)
             .putBoolean("auto_caps", autoCaps)
             .putBoolean("numpad", numpad)
+            .putBoolean("autocorrect", autocorrect)
             .apply()
     }
 
@@ -36,14 +38,15 @@ data class KeyboardPrefs(
             val d = KeyboardPrefs()
             return KeyboardPrefs(
                 theme = sp.getString("theme", d.theme) ?: d.theme,
-                accent = sp.getString("accent_color", d.accent) ?: d.accent,
-                shape = sp.getString("shape", d.shape) ?: d.shape,
+                accent = sp.getString("accent_v3", d.accent) ?: d.accent,
+                shape = sp.getString("shape_v2", d.shape) ?: d.shape,
                 borders = sp.getBoolean("borders", d.borders),
                 numberRow = sp.getBoolean("number_row", d.numberRow),
                 haptics = sp.getBoolean("haptics", d.haptics),
                 sound = sp.getBoolean("sound", d.sound),
                 autoCaps = sp.getBoolean("auto_caps", d.autoCaps),
                 numpad = sp.getBoolean("numpad", d.numpad),
+                autocorrect = sp.getBoolean("autocorrect", d.autocorrect),
             )
         }
     }
@@ -72,17 +75,17 @@ object Themes {
     )
 
     val ACCENTS = listOf(
+        "lilac" to "Lilac",
         "blue" to "Blue",
         "mint" to "Mint",
         "coral" to "Coral",
-        "lavender" to "Lavender",
         "dynamic" to "Wallpaper",
     )
 
     val SHAPES = listOf(
+        "square" to "Square",
         "round" to "Rounded",
         "pill" to "Pill",
-        "square" to "Square",
     )
 
     private fun c(v: Long): Int = v.toInt()
@@ -90,7 +93,7 @@ object Themes {
     fun accentColor(context: Context, id: String): Int = when (id) {
         "blue" -> c(0xFFA8C7FA)
         "coral" -> c(0xFFFFB4A8)
-        "lavender" -> c(0xFFD7BAFF)
+        "lilac", "lavender" -> c(0xFFD7BAFF)
         "dynamic" -> context.getColor(android.R.color.system_accent1_200)
         else -> c(0xFF7FE0C4)
     }

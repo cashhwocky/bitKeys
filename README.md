@@ -5,9 +5,10 @@ bitDroid's Keyboard App. It's a rounded-key keyboard that defaults to AMOLED bla
 ## Features
 
 - **Rounded keys on true black.** Pill-shaped space, mode and enter keys. Themes: **AMOLED** (default), Graphite, Light and Wallpaper colors (Material You).
-- **Accent colors.** Blue (default), Mint, Coral, Lavender, or your wallpaper's accent.
-- **Key shapes.** Rounded, Pill or Square. Optional key borders and number row.
+- **Accent colors.** Lilac (default), Blue, Mint, Coral, Lavender, or your wallpaper's accent.
+- **Key shapes.** Square (default), Rounded or Pill. Optional key borders and number row.
 - **Voice typing.** Three light ribbons swell with your voice. Dictation runs continuously, with live partial results, pause/resume and delete-last-word. It uses the on-device recognizer when the phone has one (Android 13+).
+- **Autocorrect.** Fixes typos when you press space or punctuation ("teh" → "the", "recieve" → "receive", "dont" → "don't", "i" → "I"), using a 37k-word dictionary and keyboard-aware spelling distance. Backspace right after a correction undoes it and remembers your word. Leaves texting words (lol, omg, idk…) alone, and can be turned off in settings.
 - **Suggestions.** A strip shows what you typed, the best match and a second option. It learns words you type (stored on the device only, never in password or incognito fields).
 - **Typing extras.** Multi-touch rollover, long-press the top row for digits, double-tap shift for caps lock, double space for ". ", and swipe the space bar to move the cursor.
 - **Every emoji.** All 1,900+ Unicode emoji (Emoji 18.0) in categories, with recents and skin tones on long-press. Emoji the phone's font can't draw are hidden automatically.
@@ -40,6 +41,12 @@ To sign releases with your own key, add these repo secrets: `BITKEYS_KEYSTORE_B6
 ```sh
 python3 tools/gen_emoji.py emoji-test.txt > app/src/main/assets/emoji.txt
 ```
+
+## Dictionary
+
+`app/src/main/assets/words.txt` is built by `tools/gen_words.py` from:
+- [FrequencyWords](https://github.com/hermitdave/FrequencyWords) by Hermit Dave (English 50k list), licensed **CC BY-SA 4.0**. The derived `words.txt` is shared under the same license.
+- The Hunspell `en_US` dictionary, used to keep only correctly spelled words and restore apostrophes and capitals.
 
 ## Ship it in bitDroid
 

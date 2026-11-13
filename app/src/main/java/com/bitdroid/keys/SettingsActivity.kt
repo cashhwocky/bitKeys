@@ -231,6 +231,7 @@ class SettingsActivity : Activity() {
 
         // Toggles
         column.addView(section("PREFERENCES", accent))
+        column.addView(toggle("Autocorrect", "Fix misspelled words when you press space. Backspace right after to undo", prefs.autocorrect, accent) { update(prefs.copy(autocorrect = it)) })
         column.addView(toggle("Auto-capitalization", "Capitalize the first letter of each sentence", prefs.autoCaps, accent) { update(prefs.copy(autoCaps = it)) })
         column.addView(toggle("Number pad", "Show a big number pad in number and phone fields (or tap 1234 on the symbols page)", prefs.numpad, accent) { update(prefs.copy(numpad = it)) })
         column.addView(toggle("Number row", "Always show 1–0 above the letters", prefs.numberRow, accent) { update(prefs.copy(numberRow = it)) })

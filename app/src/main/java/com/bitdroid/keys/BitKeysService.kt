@@ -35,6 +35,9 @@ class BitKeysService : InputMethodService(), KeyboardView.Listener, VoicePanelVi
     private var listening = false
     private var needsLeadingSpace = false
 
+    /** The last autocorrect (original, replacement, separator) so backspace can undo it. */
+    private var lastCorrection: Triple<String, String, String>? = null
+
     override fun onCreate() {
         super.onCreate()
         suggester = Suggester(this)
@@ -143,8 +146,39 @@ class BitKeysService : InputMethodService(), KeyboardView.Listener, VoicePanelVi
         val word = currentWord()
         keyboard.setSuggestions(
             if (hasSelection || word.isEmpty() || isPrivateField(info) || keyboard.mode != KeyboardView.Mode.LETTERS) emptyList()
-            else suggester.slots(word)
+            else suggester.slots(word, autocorrectAllowed())
         )
+    }
+
+    private fun autocorrectAllowed(): Boolean {
+        val info = currentInputEditorInfo ?: return false
+        if (!prefs.autocorrect || isPrivateField(info)) return false
+        if (info.inputType and InputType.TYPE_MASK_CLASS != InputType.TYPE_CLASS_TEXT) return false
+        return when (info.inputType and InputType.TYPE_MASK_VARIATION) {
+            InputType.TYPE_TEXT_VARIATION_URI,
+            InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
+            InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS,
+            InputType.TYPE_TEXT_VARIATION_FILTER,
+            InputType.TYPE_TEXT_VARIATION_PHONETIC -> false
+            else -> true
+        }
+    }
+
+    /** Replaces the word before the cursor with its correction, then types [separator]. */
+    private fun autocorrect(separator: String): Boolean {
+        if (!autocorrectAllowed()) return false
+        val ic = currentInputConnection ?: return false
+        if (!ic.getSelectedText(0).isNullOrEmpty()) return false
+        val word = currentWord()
+        if (word.isEmpty()) return false
+        val fixed = suggester.correction(word) ?: return false
+        if (fixed == word) return false
+        ic.beginBatchEdit()
+        ic.deleteSurroundingText(word.length, 0)
+        ic.commitText(fixed + separator, 1)
+        ic.endBatchEdit()
+        lastCorrection = Triple(word, fixed, separator)
+        return true
     }
 
     private fun learnCurrentWord() {
@@ -168,14 +202,37 @@ class BitKeysService : InputMethodService(), KeyboardView.Listener, VoicePanelVi
                 refresh()
                 return
             }
+        }
+        if (text.length == 1 && text[0] in SEPARATORS) {
+            if (autocorrect(text)) {
+                refresh()
+                return
+            }
             learnCurrentWord()
         }
+        lastCorrection = null
         ic.commitText(text, 1)
         refresh()
     }
 
     override fun onDelete() {
         val ic = currentInputConnection ?: return
+        val undo = lastCorrection
+        lastCorrection = null
+        if (undo != null) {
+            val (original, fixed, sep) = undo
+            val expected = fixed + sep
+            if (ic.getTextBeforeCursor(expected.length, 0)?.toString() == expected) {
+                // Backspace right after an autocorrect puts back what you typed (and remembers it).
+                ic.beginBatchEdit()
+                ic.deleteSurroundingText(expected.length, 0)
+                ic.commitText(original, 1)
+                ic.endBatchEdit()
+                suggester.learn(original, strong = true)
+                refresh()
+                return
+            }
+        }
         if (!ic.getSelectedText(0).isNullOrEmpty()) {
             ic.commitText("", 1)
         } else {
@@ -187,7 +244,8 @@ class BitKeysService : InputMethodService(), KeyboardView.Listener, VoicePanelVi
     override fun onEnter() {
         val ic = currentInputConnection ?: return
         val info = currentInputEditorInfo
-        learnCurrentWord()
+        if (!autocorrect("")) learnCurrentWord()
+        lastCorrection = null
         val action = (info?.imeOptions ?: 0) and EditorInfo.IME_MASK_ACTION
         val noEnterAction = info != null && info.imeOptions and EditorInfo.IME_FLAG_NO_ENTER_ACTION != 0
         if (info == null || noEnterAction || action == EditorInfo.IME_ACTION_NONE || action == EditorInfo.IME_ACTION_UNSPECIFIED) {
@@ -205,7 +263,8 @@ class BitKeysService : InputMethodService(), KeyboardView.Listener, VoicePanelVi
         ic.deleteSurroundingText(typed.length, 0)
         ic.commitText("$word ", 1)
         ic.endBatchEdit()
-        if (!isPrivateField(currentInputEditorInfo)) suggester.learn(word)
+        lastCorrection = null
+        if (!isPrivateField(currentInputEditorInfo)) suggester.learn(word, strong = word == typed)
         refresh()
     }
 
@@ -229,6 +288,7 @@ class BitKeysService : InputMethodService(), KeyboardView.Listener, VoicePanelVi
     }
 
     override fun onCursorMove(steps: Int) {
+        lastCorrection = null
         val code = if (steps < 0) KeyEvent.KEYCODE_DPAD_LEFT else KeyEvent.KEYCODE_DPAD_RIGHT
         repeat(abs(steps)) { sendDownUpKeyEvents(code) }
     }
@@ -258,6 +318,7 @@ class BitKeysService : InputMethodService(), KeyboardView.Listener, VoicePanelVi
     }
 
     override fun onEmoji(emoji: String) {
+        lastCorrection = null
         currentInputConnection?.commitText(emoji, 1)
     }
 
@@ -395,6 +456,10 @@ class BitKeysService : InputMethodService(), KeyboardView.Listener, VoicePanelVi
             if (hide) showVoice(false)
         }
         if (::keyboard.isInitialized && hide) refresh()
+    }
+
+    companion object {
+        private const val SEPARATORS = " .,!?;:"
     }
 
     // ------------------------------------------------------------ VoicePanelView.Listener
