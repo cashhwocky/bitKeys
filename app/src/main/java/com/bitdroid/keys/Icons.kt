@@ -6,7 +6,7 @@ import android.graphics.Path
 import android.graphics.RectF
 
 /** Stroke icons drawn on a 24×24 grid, scaled to any size. No bitmap assets needed. */
-enum class Icon { SHIFT, SHIFT_LOCK, DELETE, ARROW, NEWLINE, SEARCH, DONE, MIC, EMOJI, CLIPBOARD, SETTINGS, KEYBOARD, PAUSE }
+enum class Icon { CHEVRON_DOWN, SHIFT, SHIFT_LOCK, DELETE, ARROW, NEWLINE, SEARCH, DONE, MIC, EMOJI, CLIPBOARD, SETTINGS, KEYBOARD, PAUSE }
 
 object Icons {
 
@@ -15,6 +15,9 @@ object Icons {
 
     private fun build(icon: Icon): Path = Path().apply {
         when (icon) {
+            Icon.CHEVRON_DOWN -> {
+                moveTo(6f, 9.5f); lineTo(12f, 15.5f); lineTo(18f, 9.5f)
+            }
             Icon.SHIFT, Icon.SHIFT_LOCK -> {
                 moveTo(12f, 3.5f); lineTo(20f, 11.7f); lineTo(15.8f, 11.7f); lineTo(15.8f, 18.5f)
                 lineTo(8.2f, 18.5f); lineTo(8.2f, 11.7f); lineTo(4f, 11.7f); close()

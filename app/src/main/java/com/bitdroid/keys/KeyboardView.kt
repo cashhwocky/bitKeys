@@ -35,7 +35,7 @@ class KeyboardView(context: Context) : View(context) {
         fun onCursorMove(steps: Int)
     }
 
-    enum class ToolbarAction { EMOJI, CLIPBOARD, SETTINGS, MIC }
+    enum class ToolbarAction { EMOJI, CLIPBOARD, SETTINGS, MIC, HIDE }
     enum class Mode { LETTERS, SYMBOLS, SYMBOLS2, NUMPAD }
     enum class Shift { OFF, ON, LOCKED }
     enum class EnterStyle { ENTER, SEND, SEARCH, GO, NEXT, DONE }
@@ -282,6 +282,9 @@ class KeyboardView(context: Context) : View(context) {
                 val left = stripPill.left + dp(6f) + i * (tool + dp(6f))
                 strip.add(StripTarget(RectF(left, cy - tool / 2, left + tool, cy + tool / 2), action = action, emoji = isEmoji))
             }
+            // bitKeys' own "hide keyboard" arrow, next to the mic
+            val hideRight = micRight - mic - dp(6f)
+            strip.add(StripTarget(RectF(hideRight - tool, cy - tool / 2, hideRight, cy + tool / 2), action = ToolbarAction.HIDE))
         } else {
             slotLeft = stripPill.left + dp(8f)
             val right = micRight - mic - dp(6f)
@@ -344,6 +347,13 @@ class KeyboardView(context: Context) : View(context) {
                     val label = ellipsize(t.word, textPaint, r.width() - dp(8f))
                     canvas.drawText(label, r.centerX(), baseline(r, textPaint), textPaint)
                     textPaint.typeface = Typeface.DEFAULT
+                }
+                t.action == ToolbarAction.HIDE -> {
+                    if (pressed) {
+                        fillPaint.color = palette.pressed
+                        canvas.drawCircle(r.centerX(), r.centerY(), r.width() / 2, fillPaint)
+                    }
+                    Icons.draw(canvas, Icon.CHEVRON_DOWN, r.centerX(), r.centerY(), dp(26f), palette.text, weight = 2.2f)
                 }
                 t.action == ToolbarAction.MIC -> {
                     fillPaint.color = palette.micBg

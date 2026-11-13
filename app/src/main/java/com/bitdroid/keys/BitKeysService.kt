@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.inputmethodservice.InputMethodService
 import android.os.Build
 import android.os.Bundle
@@ -16,6 +17,8 @@ import android.text.InputType
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowInsets
+import android.view.WindowInsetsController
 import android.view.inputmethod.EditorInfo
 import android.widget.FrameLayout
 import android.widget.Toast
@@ -78,9 +81,31 @@ class BitKeysService : InputMethodService(), KeyboardView.Listener, VoicePanelVi
             }
         }
         keyboard.setEnterStyle(enterStyleFor(info))
+        styleSystemNavBar()
         showVoice(false)
         showEmoji(false)
         refresh()
+    }
+
+    override fun onWindowShown() {
+        super.onWindowShown()
+        styleSystemNavBar()
+    }
+
+    /**
+     * The system's down-arrow / globe row under the keyboard:
+     * - Android 16+ builds that allow it: hide it entirely (bitKeys has its own hide arrow).
+     * - Otherwise: keep its background transparent over the keyboard sheet and tint its
+     *   icons dark on light themes / light on dark themes so it blends in.
+     */
+    private fun styleSystemNavBar() {
+        val w = window?.window ?: return
+        @Suppress("DEPRECATION")
+        w.navigationBarColor = Color.TRANSPARENT
+        val light = ::keyboard.isInitialized && keyboard.palette().isLight
+        val flag = WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+        w.insetsController?.setSystemBarsAppearance(if (light) flag else 0, flag)
+        runCatching { w.decorView.windowInsetsController?.hide(WindowInsets.Type.captionBar()) }
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
@@ -284,6 +309,7 @@ class BitKeysService : InputMethodService(), KeyboardView.Listener, VoicePanelVi
             KeyboardView.ToolbarAction.EMOJI -> showEmoji(true)
             KeyboardView.ToolbarAction.SETTINGS -> openSettings(false)
             KeyboardView.ToolbarAction.MIC -> startVoice()
+            KeyboardView.ToolbarAction.HIDE -> requestHideSelf(0)
         }
     }
 
