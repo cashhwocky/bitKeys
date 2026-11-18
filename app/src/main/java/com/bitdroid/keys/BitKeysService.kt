@@ -6,17 +6,18 @@ import android.text.InputType
 import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
-import android.view.inputmethod.InputMethodManager
+import android.widget.FrameLayout
 
-class BitKeysService : InputMethodService(), KeyboardView.Listener {
+class BitKeysService : InputMethodService(), KeyboardView.Listener, VoicePanelView.Listener {
 
+    private var rootContainer: FrameLayout? = null
     private var keyboardView: KeyboardView? = null
+    private var voicePanelView: VoicePanelView? = null
     private lateinit var suggester: Suggester
 
     private val currentWord = StringBuilder()
     private var previousCommittedWord: String? = null
 
-    // Tracks the last autocorrect replacement so pressing Backspace immediately reverts to what the user typed
     private var lastOriginalTyped: String? = null
     private var lastAutoCorrectedTo: String? = null
     private var lastSpaceTime = 0L
@@ -29,12 +30,26 @@ class BitKeysService : InputMethodService(), KeyboardView.Listener {
 
     override fun onCreateInputView(): View {
         Storage.load(this)
-        val view = KeyboardView(this)
-        view.listener = this
-        view.refreshConfig()
-        keyboardView = view
+        val container = FrameLayout(this)
+
+        val kv = KeyboardView(this).apply {
+            listener = this@BitKeysService
+            refreshConfig()
+        }
+        val vpv = VoicePanelView(this).apply {
+            listener = this@BitKeysService
+            theme = Themes.byId(Storage.themeId)
+            visibility = View.GONE
+        }
+
+        container.addView(kv)
+        container.addView(vpv)
+
+        rootContainer = container
+        keyboardView = kv
+        voicePanelView = vpv
         refreshSuggestions()
-        return view
+        return container
     }
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
@@ -44,9 +59,22 @@ class BitKeysService : InputMethodService(), KeyboardView.Listener {
         currentWord.clear()
         lastOriginalTyped = null
         lastAutoCorrectedTo = null
+
+        // Always ensure voice mic is shut off when switching fields unless user presses Mic
+        voicePanelView?.pauseListeningImmediate()
+        voicePanelView?.visibility = View.GONE
+        voicePanelView?.theme = Themes.byId(Storage.themeId)
+
+        keyboardView?.visibility = View.VISIBLE
         keyboardView?.refreshConfig()
         updateAutoCapitalization()
         refreshSuggestions()
+    }
+
+    override fun onFinishInputView(finishingInput: Boolean) {
+        // Immediately cut off mic hardware when keyboard hides
+        voicePanelView?.pauseListeningImmediate()
+        super.onFinishInputView(finishingInput)
     }
 
     private fun updateAutoCapitalization() {
@@ -81,7 +109,6 @@ class BitKeysService : InputMethodService(), KeyboardView.Listener {
             ic.commitText(ch, 1)
             refreshSuggestions()
         } else {
-            // Punctuation or symbol commits any pending word (with autocorrect if confident)
             commitPendingWordWithAutocorrectIfApplicable()
             ic.commitText(ch, 1)
             updateAutoCapitalization()
@@ -116,7 +143,6 @@ class BitKeysService : InputMethodService(), KeyboardView.Listener {
         val ic = currentInputConnection ?: return
         val now = System.currentTimeMillis()
 
-        // Double-space period shortcut (when not actively composing a word)
         if (Storage.doubleSpacePeriod && currentWord.isEmpty() && (now - lastSpaceTime) < 340L) {
             val before = ic.getTextBeforeCursor(2, 0)?.toString() ?: ""
             if (before.length == 2 && before[1] == ' ' && before[0].isLetterOrDigit()) {
@@ -139,8 +165,6 @@ class BitKeysService : InputMethodService(), KeyboardView.Listener {
     override fun onBackspace() {
         val ic = currentInputConnection ?: return
 
-        // Smart Gboard Undo: if user just hit Space and triggered an unwanted autocorrect,
-        // pressing Backspace immediately restores their exact original typed spelling!
         val orig = lastOriginalTyped
         val corrected = lastAutoCorrectedTo
         if (currentWord.isEmpty() && orig != null && corrected != null) {
@@ -150,7 +174,6 @@ class BitKeysService : InputMethodService(), KeyboardView.Listener {
                 ic.commitText(orig, 1)
                 currentWord.clear()
                 currentWord.append(orig)
-                // Also record original word so bitKeys learns not to override it next time
                 Storage.recordUserWord(this, orig)
                 suggester.reloadUserWords()
                 lastOriginalTyped = null
@@ -167,7 +190,6 @@ class BitKeysService : InputMethodService(), KeyboardView.Listener {
             ic.deleteSurroundingText(1, 0)
         } else {
             ic.deleteSurroundingText(1, 0)
-            // Re-hydrate currentWord if cursor is now at the end of an existing word
             val before = ic.getTextBeforeCursor(20, 0)?.toString() ?: ""
             val trailingWord = before.takeLastWhile { it.isLetter() || it == '\'' }
             currentWord.clear()
@@ -211,7 +233,6 @@ class BitKeysService : InputMethodService(), KeyboardView.Listener {
         ic.commitText("$word ", 1)
         previousCommittedWord = word
 
-        // Learn words the user explicitly taps (especially slot 0 exact-typed words)
         Storage.recordUserWord(this, word)
         suggester.reloadUserWords()
 
@@ -256,11 +277,43 @@ class BitKeysService : InputMethodService(), KeyboardView.Listener {
         }
     }
 
-    override fun onSwitchIme() {
-        try {
-            val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
-            imm.showInputMethodPicker()
-        } catch (_: Exception) {
+    override fun onVoiceStart() {
+        commitPendingWordWithAutocorrectIfApplicable()
+        keyboardView?.visibility = View.GONE
+        voicePanelView?.apply {
+            theme = Themes.byId(Storage.themeId)
+            visibility = View.VISIBLE
+            resumeListeningExplicit()
         }
+    }
+
+    // VoicePanelView.Listener callbacks
+    override fun onVoiceCommit(text: String) {
+        val ic = currentInputConnection ?: return
+        ic.finishComposingText()
+        ic.commitText(text, 1)
+    }
+
+    override fun onVoicePartial(text: String) {
+        val ic = currentInputConnection ?: return
+        if (text.isEmpty()) {
+            ic.finishComposingText()
+        } else {
+            ic.setComposingText(text, 1)
+        }
+    }
+
+    override fun onVoiceClose() {
+        currentInputConnection?.finishComposingText()
+        voicePanelView?.pauseListeningImmediate()
+        voicePanelView?.visibility = View.GONE
+        keyboardView?.visibility = View.VISIBLE
+        updateAutoCapitalization()
+        refreshSuggestions()
+    }
+
+    override fun onVoiceBackspace() {
+        currentInputConnection?.finishComposingText()
+        onBackspace()
     }
 }

@@ -15,7 +15,6 @@ import android.view.View
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.max
-import kotlin.math.min
 
 class KeyboardView @JvmOverloads constructor(
     context: Context,
@@ -31,7 +30,7 @@ class KeyboardView @JvmOverloads constructor(
         fun onSuggestionClicked(word: String, index: Int)
         fun onCursorMove(delta: Int)
         fun onOpenSettings()
-        fun onSwitchIme()
+        fun onVoiceStart()
     }
 
     enum class Mode { LETTERS, SYMBOLS, SYMBOLS_MORE }
@@ -74,7 +73,7 @@ class KeyboardView @JvmOverloads constructor(
     private val rows = mutableListOf<List<KeyCap>>()
     private val suggestionRects = Array(3) { RectF() }
     private val settingsChipRect = RectF()
-    private val imeSwitchChipRect = RectF()
+    private val voiceChipRect = RectF()
 
     private var activeKey: KeyCap? = null
     private var downX = 0f
@@ -248,10 +247,9 @@ class KeyboardView @JvmOverloads constructor(
     private fun computeKeyBounds(w: Float, h: Float) {
         val stripH = dp(44f)
 
-        // Left action icon (Settings), 3 Gboard suggestion slots, right action icon (Globe/IME)
         val sideBtnW = dp(42f)
         settingsChipRect.set(dp(4f), dp(4f), sideBtnW, stripH - dp(4f))
-        imeSwitchChipRect.set(w - sideBtnW, dp(4f), w - dp(4f), stripH - dp(4f))
+        voiceChipRect.set(w - sideBtnW, dp(4f), w - dp(4f), stripH - dp(4f))
 
         val stripLeft = sideBtnW + dp(2f)
         val stripRight = w - sideBtnW - dp(2f)
@@ -278,7 +276,6 @@ class KeyboardView @JvmOverloads constructor(
             val bottom = keyboardTop + (rIdx + 1) * rowH - vGap
             val totalWeight = row.sumOf { it.weight.toDouble() }.toFloat()
 
-            // Indent 9-key home row slightly like Gboard
             val sideInset = if (row.size == 9 && mode == Mode.LETTERS) w * 0.048f else dp(4f)
             val usableW = w - (sideInset * 2f)
             var cursorX = sideInset
@@ -302,24 +299,18 @@ class KeyboardView @JvmOverloads constructor(
             computeKeyBounds(width.toFloat(), height.toFloat())
         }
 
-        // 1. Board Background
         bgPaint.color = theme.boardBg
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), bgPaint)
 
-        // 2. Gboard Top Suggestion Strip
         stripPaint.color = theme.stripBg
         canvas.drawRect(0f, 0f, width.toFloat(), dp(44f), stripPaint)
 
-        // Left Settings Icon Pill & Right Globe Icon Pill
+        // Left Settings Icon & Right Voice Mic Icon
         subTextPaint.color = theme.subText
-        subTextPaint.textSize = sp(15f)
+        subTextPaint.textSize = sp(15.5f)
         canvas.drawText("⚙", settingsChipRect.centerX(), settingsChipRect.centerY() + dp(5f), subTextPaint)
-        canvas.drawText("🌐", imeSwitchChipRect.centerX(), imeSwitchChipRect.centerY() + dp(5f), subTextPaint)
+        canvas.drawText("🎤", voiceChipRect.centerX(), voiceChipRect.centerY() + dp(5f), subTextPaint)
 
-        // Gboard 3-slot layout:
-        // Center slot (slot 1) = Primary Bold / Autocorrect
-        // Left slot (slot 0) = Exact typed or 2nd suggestion
-        // Right slot (slot 2) = 3rd suggestion
         val slotDisplay = arrayOf(
             suggestions.getOrNull(1) ?: "",
             suggestions.getOrNull(0) ?: "",
@@ -335,7 +326,6 @@ class KeyboardView @JvmOverloads constructor(
             if (word.isNotEmpty()) {
                 val isCenterPrimary = (i == 1)
                 if (isCenterPrimary && primaryHighlight != null && Storage.autoCorrect) {
-                    // Subtle Gboard pill highlight behind active autocorrect
                     keyPaint.color = theme.keyBg
                     val pill = RectF(r.left + dp(6f), r.top + dp(3f), r.right - dp(6f), r.bottom - dp(3f))
                     canvas.drawRoundRect(pill, dp(16f), dp(16f), keyPaint)
@@ -356,7 +346,6 @@ class KeyboardView @JvmOverloads constructor(
             }
         }
 
-        // 3. Draw Keys
         val corner = dp(theme.cornerRadiusDp)
         rows.forEach { row ->
             row.forEach { key ->
@@ -397,7 +386,6 @@ class KeyboardView @JvmOverloads constructor(
                 val cy = key.rect.centerY() - (fm.ascent + fm.descent) / 2f
                 canvas.drawText(key.label, key.rect.centerX(), cy, labelPaint)
 
-                // Top-right secondary number hint on Q-P row when number row is hidden
                 val hint = numberHints[key.code.lowercase()]
                 if (hint != null && !Storage.showNumberRow && mode == Mode.LETTERS) {
                     subTextPaint.color = theme.subText
@@ -412,7 +400,6 @@ class KeyboardView @JvmOverloads constructor(
             }
         }
 
-        // 4. Floating Gboard Key Preview Popup on active character key
         val pressed = activeKey
         if (pressed != null && !pressed.isFunc && pressed.code != "SPACE") {
             val popW = max(pressed.rect.width() * 1.28f, dp(46f))
@@ -432,10 +419,6 @@ class KeyboardView @JvmOverloads constructor(
         }
     }
 
-    /**
-     * Finds the closest key using cushioned hitboxes so slightly off-center presses
-     * still land on the intended key.
-     */
     private fun findKeyAt(x: Float, y: Float): KeyCap? {
         if (y <= dp(44f)) return null
         var bestKey: KeyCap? = null
@@ -509,7 +492,6 @@ class KeyboardView @JvmOverloads constructor(
             }
 
             MotionEvent.ACTION_MOVE -> {
-                // Spacebar cursor trackpad scrubbing
                 if (activeKey?.code == "SPACE") {
                     val deltaX = x - lastScrubX
                     if (abs(x - downX) > dp(14f) || isSpaceScrubbing) {
@@ -527,7 +509,6 @@ class KeyboardView @JvmOverloads constructor(
                     }
                 }
 
-                // Backspace swipe-left to delete whole word
                 if (activeKey?.code == "BACKSPACE" && (downX - x) > dp(42f)) {
                     listener?.onDeleteWord()
                     triggerHaptic()
@@ -552,14 +533,13 @@ class KeyboardView @JvmOverloads constructor(
                     return true
                 }
 
-                // Top bar tap
                 if (y <= dp(44f) && downY <= dp(44f)) {
                     if (settingsChipRect.contains(x, y)) {
                         listener?.onOpenSettings()
                         return true
                     }
-                    if (imeSwitchChipRect.contains(x, y)) {
-                        listener?.onSwitchIme()
+                    if (voiceChipRect.contains(x, y)) {
+                        listener?.onVoiceStart()
                         return true
                     }
                     val slotDisplay = arrayOf(

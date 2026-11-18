@@ -6,6 +6,8 @@ import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.provider.Settings
 import android.text.InputType
@@ -39,6 +41,9 @@ class SettingsActivity : Activity() {
     private val successGreen = Color.parseColor("#81C995")
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 101)
+        }
         super.onCreate(savedInstanceState)
         Storage.load(this)
 

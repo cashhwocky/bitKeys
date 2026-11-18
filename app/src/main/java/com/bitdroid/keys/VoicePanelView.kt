@@ -1,262 +1,367 @@
 package com.bitdroid.keys
 
+import android.Manifest
 import android.content.Context
-import android.graphics.BlurMaskFilter
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.LinearGradient
 import android.graphics.Paint
-import android.graphics.Path
 import android.graphics.RectF
-import android.graphics.Shader
 import android.graphics.Typeface
-import android.os.SystemClock
-import android.util.TypedValue
-import android.view.HapticFeedbackConstants
+import android.os.Bundle
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
+import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
-import java.util.Locale
-import kotlin.math.hypot
-import kotlin.math.sin
+import kotlin.math.max
 
-/**
- * Voice-typing panel in the Material You style: "Listening…" pill, the wavy slider line
- * as flowing voice waves, rounded-square side buttons and a scalloped pause/mic button.
- */
-class VoicePanelView(context: Context) : View(context) {
+class VoicePanelView @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null
+) : View(context, attrs) {
 
     interface Listener {
-        fun onVoiceKeyboard()
-        fun onVoiceToggle()
-        fun onVoiceDeleteWord()
+        fun onVoiceCommit(text: String)
+        fun onVoicePartial(text: String)
+        fun onVoiceClose()
+        fun onVoiceBackspace()
+    }
+
+    enum class State {
+        PAUSED,
+        LISTENING,
+        NO_PERMISSION,
+        ERROR
     }
 
     var listener: Listener? = null
-
-    /** Matches the keyboard's height so switching doesn't make the app jump. */
-    var fixedHeight = 0
+    var theme: KeyboardTheme = Themes.byId(Storage.themeId)
         set(value) {
-            if (field != value) {
-                field = value
-                requestLayout()
-            }
+            field = value
+            invalidate()
         }
 
-    /** Navigation-bar inset to keep the buttons clear of the gesture bar / nav buttons. */
-    var bottomInset = 0
+    var state: State = State.PAUSED
+        private set
 
-    private var palette = Themes.palette(context, KeyboardPrefs.load(context))
-    private var listening = false
-    private var status = "Listening…"
-    private var targetLevel = 0f
-    private var level = 0f
+    private var speechRecognizer: SpeechRecognizer? = null
+    private var statusMessage: String = "Mic paused • Tap mic to talk"
+    private var partialPreview: String = ""
+    private var rmsLevel: Float = 0f
+
+    // Strict hardware gate: when true, recognizer is destroyed and all callbacks are ignored
+    @Volatile
+    private var isMicLockedOff: Boolean = true
 
     private val density = resources.displayMetrics.density
-    private fun dp(v: Float) = v * density
-    private fun sp(v: Float) = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, v, resources.displayMetrics)
+    private val scaledDensity = resources.displayMetrics.scaledDensity
 
-    private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val text = Paint(Paint.ANTI_ALIAS_FLAG)
-
-    private class Wave(val color: Int, val alpha: Int, val amp: Float, val waves: Float, val speed: Float, val width: Float, val phase: Float) {
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeCap = Paint.Cap.ROUND
-            strokeJoin = Paint.Join.ROUND
-        }
-    }
-
-    private var waves: List<Wave> = emptyList()
-    private val glow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val cardPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val micCirclePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        strokeCap = Paint.Cap.ROUND
+        strokeWidth = 3f * density
     }
-    private val path = Path()
-
-    private val keyboardBtn = RectF()
-    private val mainBtn = RectF()
-    private val deleteBtn = RectF()
-    private var pressed: RectF? = null
-
-    private val language: String = Locale.getDefault().getDisplayName(Locale.getDefault())
-
-    init {
-        rebuildWaves()
+    private val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textAlign = Paint.Align.CENTER
+        typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+    }
+    private val subPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textAlign = Paint.Align.CENTER
+        typeface = Typeface.create("sans-serif", Typeface.NORMAL)
     }
 
-    fun setPalette(p: Palette) {
-        palette = p
-        rebuildWaves()
+    private val backBtnRect = RectF()
+    private val micBtnRect = RectF()
+    private val pauseToggleRect = RectF()
+    private val backspaceBtnRect = RectF()
+
+    private fun dp(v: Float): Float = v * density
+    private fun sp(v: Float): Float = v * scaledDensity
+
+    private fun hasMicPermission(): Boolean {
+        return context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+    }
+
+    /**
+     * Immediately kills the microphone stream, cancels in-flight recognition,
+     * and destroys the SpeechRecognizer instance so Android cuts mic access 100%.
+     */
+    fun pauseListeningImmediate() {
+        isMicLockedOff = true
+        state = State.PAUSED
+        rmsLevel = 0f
+        partialPreview = ""
+        statusMessage = "Mic paused • Tap mic or Unpause to resume"
+
+        try {
+            speechRecognizer?.stopListening()
+        } catch (_: Exception) {}
+        try {
+            speechRecognizer?.cancel()
+        } catch (_: Exception) {}
+        try {
+            speechRecognizer?.destroy()
+        } catch (_: Exception) {}
+        speechRecognizer = null
+
+        listener?.onVoicePartial("")
         invalidate()
     }
 
-    fun setListening(on: Boolean, statusText: String) {
-        listening = on
-        status = statusText
-        if (!on) targetLevel = 0f
-        invalidate()
-    }
-
-    /** 0..1 microphone level. */
-    fun setLevel(v: Float) {
-        targetLevel = v.coerceIn(0f, 1f)
-    }
-
-    private fun rebuildWaves() {
-        waves = listOf(
-            Wave(palette.accent, 140, 0.72f, 2.2f, 2.1f, dp(4f), 1.2f),
-            Wave(Color.parseColor("#7FE0C4"), 115, 0.52f, 3.1f, -2.8f, dp(3f), 2.4f),
-            Wave(palette.wave, 255, 1.0f, 2.6f, 3.6f, dp(6f), 0f),
-        )
-        applyShaders()
-    }
-
-    private fun fadeShader(color: Int, alpha: Int): Shader {
-        val solid = Color.argb(alpha, Color.red(color), Color.green(color), Color.blue(color))
-        val clear = Color.argb(0, Color.red(color), Color.green(color), Color.blue(color))
-        return LinearGradient(
-            0f, 0f, width.toFloat().coerceAtLeast(1f), 0f,
-            intArrayOf(clear, solid, solid, clear),
-            floatArrayOf(0f, 0.18f, 0.82f, 1f),
-            Shader.TileMode.CLAMP,
-        )
-    }
-
-    private fun applyShaders() {
-        for (w in waves) {
-            w.paint.strokeWidth = w.width
-            w.paint.shader = fadeShader(w.color, w.alpha)
+    /**
+     * Only called when user explicitly opens the voice panel or taps Unpause / Mic button.
+     */
+    fun resumeListeningExplicit() {
+        if (!hasMicPermission()) {
+            isMicLockedOff = true
+            state = State.NO_PERMISSION
+            statusMessage = "Microphone permission required in Android Settings"
+            invalidate()
+            return
         }
-        glow.strokeWidth = dp(14f)
-        glow.maskFilter = BlurMaskFilter(dp(6f), BlurMaskFilter.Blur.NORMAL)
-        glow.shader = fadeShader(palette.wave, 90)
+
+        // Clean up any stale instance first
+        try {
+            speechRecognizer?.cancel()
+            speechRecognizer?.destroy()
+        } catch (_: Exception) {}
+        speechRecognizer = null
+
+        if (!SpeechRecognizer.isRecognitionAvailable(context)) {
+            isMicLockedOff = true
+            state = State.ERROR
+            statusMessage = "Speech recognition service unavailable"
+            invalidate()
+            return
+        }
+
+        isMicLockedOff = false
+        state = State.LISTENING
+        partialPreview = ""
+        statusMessage = "Listening… Tap Pause or Mic to cut off immediately"
+        invalidate()
+
+        try {
+            val recognizer = SpeechRecognizer.createSpeechRecognizer(context)
+            recognizer.setRecognitionListener(object : RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) {
+                    if (isMicLockedOff) return
+                    state = State.LISTENING
+                    statusMessage = "Listening… Speak now"
+                    invalidate()
+                }
+
+                override fun onBeginningOfSpeech() {
+                    if (isMicLockedOff) return
+                }
+
+                override fun onRmsChanged(rmsdB: Float) {
+                    if (isMicLockedOff || state != State.LISTENING) return
+                    rmsLevel = max(0f, rmsdB).coerceAtMost(12f)
+                    invalidate()
+                }
+
+                override fun onBufferReceived(buffer: ByteArray?) {}
+
+                override fun onEndOfSpeech() {
+                    if (isMicLockedOff) return
+                    rmsLevel = 0f
+                    invalidate()
+                }
+
+                override fun onError(error: Int) {
+                    if (isMicLockedOff) return
+                    // When silence timeout or error happens, go to PAUSED state and shut down mic
+                    pauseListeningImmediate()
+                    statusMessage = "Mic paused • Tap mic to talk again"
+                    invalidate()
+                }
+
+                override fun onResults(results: Bundle?) {
+                    // Hard cutoff guard: ignore any late callback if user pressed Pause!
+                    if (isMicLockedOff || state != State.LISTENING) return
+                    val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    val best = matches?.firstOrNull()?.trim() ?: ""
+                    if (best.isNotEmpty()) {
+                        listener?.onVoicePartial("")
+                        listener?.onVoiceCommit("$best ")
+                    }
+                    partialPreview = ""
+                    // Keep listening continuously ONLY if user has NOT pressed pause
+                    if (!isMicLockedOff && state == State.LISTENING) {
+                        startRecognizerIntent()
+                    }
+                }
+
+                override fun onPartialResults(partialResults: Bundle?) {
+                    // Hard cutoff guard: ignore partial audio if user pressed Pause!
+                    if (isMicLockedOff || state != State.LISTENING) return
+                    val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    val partial = matches?.firstOrNull()?.trim() ?: ""
+                    partialPreview = partial
+                    listener?.onVoicePartial(partial)
+                    invalidate()
+                }
+
+                override fun onEvent(eventType: Int, params: Bundle?) {}
+            })
+            speechRecognizer = recognizer
+            startRecognizerIntent()
+        } catch (_: Exception) {
+            pauseListeningImmediate()
+            state = State.ERROR
+            statusMessage = "Could not start microphone"
+            invalidate()
+        }
+    }
+
+    private fun startRecognizerIntent() {
+        if (isMicLockedOff || state != State.LISTENING) return
+        val recognizer = speechRecognizer ?: return
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+        }
+        try {
+            recognizer.startListening(intent)
+        } catch (_: Exception) {
+            pauseListeningImmediate()
+        }
+    }
+
+    fun togglePauseResume() {
+        if (state == State.LISTENING && !isMicLockedOff) {
+            pauseListeningImmediate()
+        } else {
+            resumeListeningExplicit()
+        }
+    }
+
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        pauseListeningImmediate()
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val w = MeasureSpec.getSize(widthMeasureSpec)
-        setMeasuredDimension(w, if (fixedHeight > 0) fixedHeight else dp(344f).toInt())
+        val totalH = (dp(258f) * Storage.keyHeightScale).toInt()
+        setMeasuredDimension(w, totalH)
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        applyShaders()
-    }
+        val wf = w.toFloat()
+        val hf = h.toFloat()
 
-    private fun drawPill(canvas: Canvas, r: RectF) {
-        fill.color = palette.strip
-        canvas.drawRoundRect(r, r.height() / 2, r.height() / 2, fill)
+        backBtnRect.set(dp(14f), dp(12f), dp(104f), dp(48f))
+        backspaceBtnRect.set(wf - dp(68f), dp(12f), wf - dp(14f), dp(48f))
+
+        val r = dp(40f)
+        val cx = wf / 2f
+        val cy = hf * 0.48f
+        micBtnRect.set(cx - r, cy - r, cx + r, cy + r)
+
+        val pillW = dp(164f)
+        val pillH = dp(40f)
+        pauseToggleRect.set(
+            cx - pillW / 2f,
+            hf - pillH - dp(16f),
+            cx + pillW / 2f,
+            hf - dp(16f)
+        )
     }
 
     override fun onDraw(canvas: Canvas) {
-        val w = width.toFloat()
-        val sheet = dp(28f)
-        fill.color = palette.bg
-        canvas.drawRoundRect(0f, 0f, w, height + sheet, sheet, sheet, fill)
+        super.onDraw(canvas)
+        bgPaint.color = theme.boardBg
+        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), bgPaint)
 
-        val pad = dp(18f)
-        val t = SystemClock.uptimeMillis() / 1000f
-        level += (targetLevel - level) * 0.18f
+        // Back to Keyboard button
+        cardPaint.color = theme.funcKeyBg
+        canvas.drawRoundRect(backBtnRect, dp(18f), dp(18f), cardPaint)
+        titlePaint.color = theme.keyText
+        titlePaint.textSize = sp(13.5f)
+        canvas.drawText("⌨ ABC", backBtnRect.centerX(), backBtnRect.centerY() + dp(5f), titlePaint)
 
-        // --- header pills
-        text.textSize = sp(14f)
-        text.typeface = Typeface.DEFAULT
-        val pillH = dp(34f)
-        val top = dp(14f)
-        val statusW = text.measureText(status) + dp(44f)
-        val statusPill = RectF(pad, top, pad + statusW, top + pillH)
-        drawPill(canvas, statusPill)
-        fill.color = palette.wave
-        canvas.drawCircle(statusPill.left + dp(18f), statusPill.centerY(), dp(4f), fill)
-        text.color = palette.text
-        text.textAlign = Paint.Align.LEFT
-        canvas.drawText(status, statusPill.left + dp(30f), statusPill.centerY() - (text.descent() + text.ascent()) / 2f, text)
+        // Backspace button
+        canvas.drawRoundRect(backspaceBtnRect, dp(18f), dp(18f), cardPaint)
+        canvas.drawText("⌫", backspaceBtnRect.centerX(), backspaceBtnRect.centerY() + dp(5f), titlePaint)
 
-        val langW = text.measureText(language) + dp(28f)
-        val langPill = RectF(w - pad - langW, top, w - pad, top + pillH)
-        drawPill(canvas, langPill)
-        text.color = palette.sub
-        text.textAlign = Paint.Align.CENTER
-        canvas.drawText(language, langPill.centerX(), langPill.centerY() - (text.descent() + text.ascent()) / 2f, text)
+        val isActive = (state == State.LISTENING && !isMicLockedOff)
 
-        // --- bottom controls
-        val btnCy = height - bottomInset - dp(26f) - dp(52f)
-        val big = dp(52f)
-        val side = dp(29f)
-        mainBtn.set(w / 2 - big, btnCy - big, w / 2 + big, btnCy + big)
-        keyboardBtn.set(pad, btnCy - side, pad + side * 2, btnCy + side)
-        deleteBtn.set(w - pad - side * 2, btnCy - side, w - pad, btnCy + side)
+        // Status / Live Partial Text
+        titlePaint.textSize = sp(15f)
+        titlePaint.color = if (isActive) theme.accentBg else theme.subText
+        val topDisplay = if (isActive && partialPreview.isNotEmpty()) {
+            "“${partialPreview.takeLast(38)}”"
+        } else {
+            statusMessage
+        }
+        canvas.drawText(topDisplay, width / 2f, dp(72f), titlePaint)
 
-        // --- waves between header and buttons
-        val ribbonTop = statusPill.bottom + dp(8f)
-        val ribbonBottom = mainBtn.top - dp(4f)
-        val cy = (ribbonTop + ribbonBottom) / 2f
-        val maxAmp = (ribbonBottom - ribbonTop) / 2f - dp(8f)
-        val breathe = 0.8f + 0.2f * sin(t * 2.6f)
-        val baseAmp = if (listening) dp(12f) + level * (maxAmp - dp(12f)) else dp(4f)
-        for ((idx, wave) in waves.withIndex()) {
-            val amp = (baseAmp * wave.amp * (if (listening) breathe else 1f)).coerceAtMost(maxAmp)
-            val phase = if (listening) t * wave.speed + wave.phase else wave.phase
-            Shapes.squiggle(path, 0f, w, cy, amp, wave.waves * w / dp(412f), phase)
-            if (idx == waves.lastIndex) canvas.drawPath(path, glow)
-            canvas.drawPath(path, wave.paint)
+        // Pulsing RMS halo when actively listening
+        val cx = micBtnRect.centerX()
+        val cy = micBtnRect.centerY()
+        val baseRadius = micBtnRect.width() / 2f
+
+        if (isActive) {
+            ringPaint.color = theme.accentBg
+            ringPaint.alpha = 110
+            val pulseRadius = baseRadius + dp(8f) + (rmsLevel * dp(1.8f))
+            canvas.drawCircle(cx, cy, pulseRadius, ringPaint)
         }
 
-        // --- buttons: rounded squares + scalloped center
-        drawSquareButton(canvas, keyboardBtn, Icon.KEYBOARD)
-        drawSquareButton(canvas, deleteBtn, Icon.DELETE)
+        // Main Center Mic Button
+        micCirclePaint.color = if (isActive) Color.parseColor("#E24C4B") else theme.keyBg
+        canvas.drawCircle(cx, cy, baseRadius, micCirclePaint)
 
-        if (listening) {
-            val f = (t % 1.8f) / 1.8f
-            fill.color = palette.mod
-            fill.alpha = ((1f - f) * 90).toInt()
-            Shapes.drawCookie(canvas, mainBtn.centerX(), mainBtn.centerY(), big * (1f + 0.45f * f), fill, lobes = 12, amp = 0.07f)
-            fill.alpha = 255
-        }
-        fill.color = palette.mod
-        val s = if (pressed === mainBtn) 0.93f else 1f
-        val spin = if (listening) (t * 12f) % 360f else 0f
-        canvas.save()
-        canvas.rotate(spin, mainBtn.centerX(), mainBtn.centerY())
-        Shapes.drawCookie(canvas, mainBtn.centerX(), mainBtn.centerY(), big * s, fill, lobes = 12, amp = 0.07f)
-        canvas.restore()
-        Icons.draw(
-            canvas, if (listening) Icon.PAUSE else Icon.MIC,
-            mainBtn.centerX(), mainBtn.centerY(), dp(32f), palette.onMod, weight = 2.2f,
+        titlePaint.color = if (isActive) Color.WHITE else theme.keyText
+        titlePaint.textSize = sp(26f)
+        canvas.drawText(if (isActive) "⏸" else "🎤", cx, cy + dp(9f), titlePaint)
+
+        // Bottom Explicit Pause / Unpause Pill Button
+        cardPaint.color = if (isActive) Color.parseColor("#3B1D22") else theme.accentBg
+        canvas.drawRoundRect(pauseToggleRect, dp(20f), dp(20f), cardPaint)
+
+        titlePaint.color = if (isActive) Color.parseColor("#FFB4AB") else theme.accentText
+        titlePaint.textSize = sp(14f)
+        val actionLabel = if (isActive) "⏸ Pause Mic Now" else "🎤 Unpause Mic"
+        canvas.drawText(
+            actionLabel,
+            pauseToggleRect.centerX(),
+            pauseToggleRect.centerY() + dp(5f),
+            titlePaint
         )
-
-        if (isShown) postInvalidateOnAnimation()
     }
 
-    private fun drawSquareButton(canvas: Canvas, r: RectF, icon: Icon) {
-        fill.color = if (pressed === r) palette.pressed else palette.key
-        canvas.drawRoundRect(r, dp(22f), dp(22f), fill)
-        Icons.draw(canvas, icon, r.centerX(), r.centerY(), dp(25f), palette.text, weight = 1.9f)
-    }
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            val x = event.x
+            val y = event.y
 
-    private fun hit(x: Float, y: Float): RectF? = listOf(mainBtn, keyboardBtn, deleteBtn).firstOrNull {
-        hypot(x - it.centerX(), y - it.centerY()) <= it.width() / 2 + dp(8f)
-    }
-
-    override fun onTouchEvent(e: MotionEvent): Boolean {
-        when (e.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                pressed = hit(e.x, e.y)
-                if (pressed != null) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+            if (backBtnRect.contains(x, y)) {
+                pauseListeningImmediate()
+                listener?.onVoiceClose()
+                return true
             }
-            MotionEvent.ACTION_UP -> {
-                val target = pressed
-                pressed = null
-                if (target != null && hit(e.x, e.y) === target) {
-                    when {
-                        target === mainBtn -> listener?.onVoiceToggle()
-                        target === keyboardBtn -> listener?.onVoiceKeyboard()
-                        target === deleteBtn -> listener?.onVoiceDeleteWord()
-                    }
-                }
+
+            if (backspaceBtnRect.contains(x, y)) {
+                listener?.onVoiceBackspace()
+                return true
             }
-            MotionEvent.ACTION_CANCEL -> pressed = null
+
+            if (micBtnRect.contains(x, y) || pauseToggleRect.contains(x, y)) {
+                togglePauseResume()
+                return true
+            }
         }
-        invalidate()
         return true
     }
 }
