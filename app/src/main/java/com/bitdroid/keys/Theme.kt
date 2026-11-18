@@ -213,7 +213,7 @@ object Themes {
             "rosequartz" -> Palette(
                 bg = c(0xFFF7E6EC), key = c(0xFFFFF9FB), mod = c(0xFFEBC5D3), onMod = c(0xFF3D1E29),
                 text = c(0xFF3D1E29), sub = c(0xFF875C6B), pressed = c(0xFFF0D0DC), border = c(0xFFDFB6C5),
-                accent = c(0xFFA83860), onAccent = WHITE, strip = c(c(0xFFFFF2F6)),
+                accent = c(0xFFA83860), onAccent = WHITE, strip = c(0xFFFFF2F6),
                 tool = c(0xFFA83860), onTool = c(0xFFFFE8F0), micBg = c(0xFFA83860), micFg = WHITE,
                 wave = c(0xFFD46A8E), isLight = true,
             )
