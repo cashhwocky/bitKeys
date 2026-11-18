@@ -2,668 +2,626 @@ package com.bitdroid.keys
 
 import android.content.Context
 import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.Paint
-import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Typeface
-import android.media.AudioManager
-import android.os.Handler
-import android.os.Looper
-import android.os.SystemClock
-import android.util.TypedValue
-import android.view.HapticFeedbackConstants
+import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
+import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
-import android.view.WindowInsets
 import kotlin.math.abs
+import kotlin.math.hypot
+import kotlin.math.max
 import kotlin.math.min
 
-/**
- * The whole keyboard surface — toolbar/suggestion strip plus key rows — drawn on one Canvas.
- * Rounded keys, AMOLED-first palette, multi-touch rollover, long-press for digits,
- * swipe on the space bar to move the cursor.
- */
-class KeyboardView(context: Context) : View(context) {
+class KeyboardView @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null
+) : View(context, attrs) {
 
     interface Listener {
-        fun onText(text: String)
-        fun onDelete()
+        fun onCharacter(ch: String)
+        fun onBackspace()
+        fun onDeleteWord()
+        fun onSpace()
         fun onEnter()
-        fun onSuggestion(word: String)
-        fun onToolbar(action: ToolbarAction)
-        fun onCursorMove(steps: Int)
+        fun onSuggestionClicked(word: String, index: Int)
+        fun onCursorMove(delta: Int)
+        fun onOpenSettings()
+        fun onSwitchIme()
     }
 
-    enum class ToolbarAction { EMOJI, CLIPBOARD, SETTINGS, MIC, HIDE }
-    enum class Mode { LETTERS, SYMBOLS, SYMBOLS2, NUMPAD }
-    enum class Shift { OFF, ON, LOCKED }
-    enum class EnterStyle { ENTER, SEND, SEARCH, GO, NEXT, DONE }
+    enum class Mode { LETTERS, SYMBOLS, SYMBOLS_MORE }
+    enum class ShiftState { LOWER, SHIFTED, CAPS_LOCK }
 
-    private enum class Kind { CHAR, SHIFT, DELETE, MODE, PAGE, ABC, NUMPAD, ENTER, SPACE, SPACER }
-
-    private class Key(
-        val kind: Kind,
-        val label: String = "",
+    data class KeyCap(
+        val code: String,
+        val label: String,
         val weight: Float = 1f,
-        val alt: String? = null,
-        val mod: Boolean = false,
-    ) {
-        val rect = RectF()
-    }
-
-    private class StripTarget(val rect: RectF, val word: String? = null, val action: ToolbarAction? = null, val emoji: Boolean = false, val slot: Int = -1)
-
-    private class Pointer(
-        val id: Int,
-        var key: Key?,
-        var strip: StripTarget?,
-        var anchorX: Float,
-        var longFired: Boolean = false,
-        var cursorMode: Boolean = false,
-        var longPress: Runnable? = null,
-        var repeat: Runnable? = null,
+        val isFunc: Boolean = false,
+        val isAccent: Boolean = false,
+        val rect: RectF = RectF()
     )
 
     var listener: Listener? = null
+    var theme: KeyboardTheme = Themes.byId(Storage.themeId)
+        set(value) {
+            field = value
+            invalidate()
+        }
 
-    private var prefs = KeyboardPrefs.load(context)
-    private var palette = Themes.palette(context, prefs)
+    var mode: Mode = Mode.LETTERS
+        set(value) {
+            field = value
+            rebuildLayout()
+            invalidate()
+        }
 
-    var mode = Mode.LETTERS
-        private set
-    var shift = Shift.OFF
-        private set
-    private var lastShiftTap = 0L
-    private var enterStyle = EnterStyle.ENTER
-    private var slots: List<String> = emptyList()
+    var shiftState: ShiftState = ShiftState.SHIFTED
+        set(value) {
+            field = value
+            rebuildLayout()
+            invalidate()
+        }
 
-    private var rows: List<List<Key>> = emptyList()
-    private val strip = ArrayList<StripTarget>()
-    private val pointers = HashMap<Int, Pointer>()
-    private val pressedKeys = HashSet<Key>()
-    private val pressedStrip = HashSet<StripTarget>()
-    private val uiHandler = Handler(Looper.getMainLooper())
-    private val audio = context.getSystemService(AudioManager::class.java)
+    private var suggestions: List<String> = listOf("I", "the", "you")
+    private var primaryHighlight: String? = null
+    private var rawComposing: String = ""
+
+    private val rows = mutableListOf<List<KeyCap>>()
+    private val suggestionRects = Array(3) { RectF() }
+    private val settingsChipRect = RectF()
+    private val imeSwitchChipRect = RectF()
+
+    private var activeKey: KeyCap? = null
+    private var downX = 0f
+    private var downY = 0f
+    private var isSpaceScrubbing = false
+    private var lastScrubX = 0f
+    private var lastShiftTapTime = 0L
 
     private val density = resources.displayMetrics.density
-    private fun dp(v: Float) = v * density
-    private fun sp(v: Float) = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, v, resources.displayMetrics)
+    private val scaledDensity = resources.displayMetrics.scaledDensity
 
-    private val stripH = dp(52f)
-    private val keyH = dp(54f)
-    private val rowGap = dp(8f)
-    private val keyGap = dp(5f)
-    private val sidePad = dp(6f)
-    private val topPad = dp(4f)
-    private val stripGap = dp(6f)
-    private val bottomPad = dp(22f) // breathing room above the system back / IME-switcher row
-    var navInset = 0
-        private set
-
-    private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = dp(1f) }
+    private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val stripPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val keyPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         textAlign = Paint.Align.CENTER
         typeface = Typeface.create("sans-serif", Typeface.NORMAL)
     }
-    private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val boldTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textAlign = Paint.Align.CENTER
+        typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+    }
+    private val subTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         textAlign = Paint.Align.CENTER
         typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
     }
-    private val tmp = RectF()
+    private val dividerPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val popupPaint = Paint(Paint.ANTI_ALIAS_FLAG)
 
-    init {
-        isHapticFeedbackEnabled = true
-        setOnApplyWindowInsetsListener { _, insets ->
-            val bottom = insets.getInsets(WindowInsets.Type.navigationBars()).bottom
-            if (bottom != navInset) {
-                navInset = bottom
-                requestLayout()
-            }
-            insets
-        }
-        buildRows()
-    }
-
-    // ---------------------------------------------------------------- public API
-
-    fun applyPrefs(p: KeyboardPrefs) {
-        prefs = p
-        palette = Themes.palette(context, p)
-        buildRows()
-        requestLayout()
-        invalidate()
-    }
-
-    fun palette(): Palette = palette
-
-    /** Phone-number fields get * # + on the number pad instead of - , . */
-    private var phonePad = false
-
-    fun openNumpad(phone: Boolean) {
-        phonePad = phone
-        mode = Mode.NUMPAD
-        buildRows()
-        requestLayout()
-        invalidate()
-    }
-
-    fun switchMode(m: Mode) {
-        if (m == mode) return
-        mode = m
-        buildRows()
-        requestLayout()
-        invalidate()
-    }
-
-    fun setAutoShift(on: Boolean) {
-        if (shift == Shift.LOCKED) return
-        val next = if (on) Shift.ON else Shift.OFF
-        if (next != shift) {
-            shift = next
-            invalidate()
-        }
-    }
-
-    fun setEnterStyle(style: EnterStyle) {
-        enterStyle = style
-        invalidate()
-    }
-
-    /** Three slots [verbatim, best, second]; an empty list shows the toolbar instead. */
-    fun setSuggestions(list: List<String>) {
-        if (list == slots) return
-        slots = list
-        layoutStrip()
-        invalidate()
-    }
-
-    // ---------------------------------------------------------------- layout
-
-    private fun chars(s: String, alts: String? = null): List<Key> =
-        s.mapIndexed { i, ch -> Key(Kind.CHAR, ch.toString(), 1f, alts?.getOrNull(i)?.toString()) }
-
-    private fun bottomRow(modeLabel: String, numpadKey: Boolean = false): List<Key> = listOfNotNull(
-        Key(Kind.MODE, modeLabel, 1.5f, mod = true),
-        if (numpadKey) Key(Kind.NUMPAD, "1234", 1.3f, mod = true) else null,
-        Key(Kind.CHAR, ",", 1f, mod = true),
-        Key(Kind.SPACE, "", if (numpadKey) 3.3f else 4.6f),
-        Key(Kind.CHAR, ".", 1f, mod = true),
-        Key(Kind.ENTER, "", 1.5f),
+    private val numberHints = mapOf(
+        "q" to "1", "w" to "2", "e" to "3", "r" to "4", "t" to "5",
+        "y" to "6", "u" to "7", "i" to "8", "o" to "9", "p" to "0"
     )
 
-    private fun buildRows() {
-        rows = when (mode) {
-            Mode.LETTERS -> buildList {
-                if (prefs.numberRow) add(chars("1234567890"))
-                add(chars("qwertyuiop", if (prefs.numberRow) null else "1234567890"))
-                add(listOf(Key(Kind.SPACER, weight = 0.5f)) + chars("asdfghjkl") + Key(Kind.SPACER, weight = 0.5f))
-                add(listOf(Key(Kind.SHIFT, weight = 1.5f, mod = true)) + chars("zxcvbnm") + Key(Kind.DELETE, weight = 1.5f, mod = true))
-                add(bottomRow("?123"))
-            }
-            Mode.SYMBOLS -> listOf(
-                chars("1234567890"),
-                chars("@#\$_&-+()/"),
-                listOf(Key(Kind.PAGE, "=\\<", 1.5f, mod = true)) + chars("*\"':;!?") + Key(Kind.DELETE, weight = 1.5f, mod = true),
-                bottomRow("ABC", numpadKey = true),
-            )
-            Mode.SYMBOLS2 -> listOf(
-                chars("~`|•√π÷×¶∆"),
-                chars("£¢€¥^°={}\\"),
-                listOf(Key(Kind.PAGE, "?123", 1.5f, mod = true)) + chars("%©®™✓[]") + Key(Kind.DELETE, weight = 1.5f, mod = true),
-                bottomRow("ABC", numpadKey = true),
-            )
-            Mode.NUMPAD -> listOf(
-                chars("123") + Key(Kind.CHAR, if (phonePad) "+" else "-", mod = true),
-                chars("456") + Key(Kind.CHAR, if (phonePad) "*" else ",", mod = true),
-                chars("789") + Key(Kind.DELETE, mod = true),
-                listOf(
-                    Key(Kind.ABC, "ABC", mod = true),
-                    Key(Kind.CHAR, "0"),
-                    Key(Kind.CHAR, if (phonePad) "#" else ".", mod = true),
-                    Key(Kind.ENTER),
-                ),
-            )
+    init {
+        rebuildLayout()
+    }
+
+    fun updateSuggestions(candidates: List<String>, primary: String?, composing: String) {
+        suggestions = candidates.take(3)
+        primaryHighlight = primary
+        rawComposing = composing
+        invalidate()
+    }
+
+    fun refreshConfig() {
+        Storage.load(context)
+        theme = Themes.byId(Storage.themeId)
+        rebuildLayout()
+        requestLayout()
+        invalidate()
+    }
+
+    private fun dp(v: Float): Float = v * density
+    private fun sp(v: Float): Float = v * scaledDensity
+
+    private fun rebuildLayout() {
+        rows.clear()
+        val upper = shiftState != ShiftState.LOWER
+
+        if (Storage.showNumberRow && mode == Mode.LETTERS) {
+            rows.add(listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0").map {
+                KeyCap(code = it, label = it)
+            })
         }
-        if (width > 0) layoutKeys()
-        layoutStrip()
+
+        when (mode) {
+            Mode.LETTERS -> {
+                rows.add(listOf("q", "w", "e", "r", "t", "y", "u", "i", "o", "p").map {
+                    val l = if (upper) it.uppercase() else it
+                    KeyCap(code = l, label = l)
+                })
+                rows.add(listOf("a", "s", "d", "f", "g", "h", "j", "k", "l").map {
+                    val l = if (upper) it.uppercase() else it
+                    KeyCap(code = l, label = l)
+                })
+                val shiftLabel = when (shiftState) {
+                    ShiftState.LOWER -> "⇧"
+                    ShiftState.SHIFTED -> "⬆"
+                    ShiftState.CAPS_LOCK -> "⇪"
+                }
+                val r3 = mutableListOf<KeyCap>()
+                r3.add(KeyCap("SHIFT", shiftLabel, weight = 1.48f, isFunc = true))
+                listOf("z", "x", "c", "v", "b", "n", "m").forEach {
+                    val l = if (upper) it.uppercase() else it
+                    r3.add(KeyCap(code = l, label = l))
+                }
+                r3.add(KeyCap("BACKSPACE", "⌫", weight = 1.48f, isFunc = true))
+                rows.add(r3)
+
+                rows.add(
+                    listOf(
+                        KeyCap("MODE_SYM", "?123", weight = 1.45f, isFunc = true),
+                        KeyCap(",", ",", weight = 0.95f, isFunc = true),
+                        KeyCap("SPACE", "English", weight = 4.6f),
+                        KeyCap(".", ".", weight = 0.95f, isFunc = true),
+                        KeyCap("ENTER", "↵", weight = 1.55f, isFunc = true, isAccent = true)
+                    )
+                )
+            }
+
+            Mode.SYMBOLS -> {
+                rows.add(listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0").map {
+                    KeyCap(it, it)
+                })
+                rows.add(listOf("@", "#", "$", "_", "&", "-", "+", "(", ")", "/").map {
+                    KeyCap(it, it)
+                })
+                val r3 = mutableListOf<KeyCap>()
+                r3.add(KeyCap("MODE_SYM2", "=\\<", weight = 1.48f, isFunc = true))
+                listOf("*", "\"", "'", ":", ";", "!", "?").forEach {
+                    r3.add(KeyCap(it, it))
+                }
+                r3.add(KeyCap("BACKSPACE", "⌫", weight = 1.48f, isFunc = true))
+                rows.add(r3)
+
+                rows.add(
+                    listOf(
+                        KeyCap("MODE_ABC", "ABC", weight = 1.45f, isFunc = true),
+                        KeyCap(",", ",", weight = 0.95f, isFunc = true),
+                        KeyCap("SPACE", "space", weight = 4.6f),
+                        KeyCap(".", ".", weight = 0.95f, isFunc = true),
+                        KeyCap("ENTER", "↵", weight = 1.55f, isFunc = true, isAccent = true)
+                    )
+                )
+            }
+
+            Mode.SYMBOLS_MORE -> {
+                rows.add(listOf("~", "`", "|", "•", "√", "π", "÷", "×", "¶", "∆").map {
+                    KeyCap(it, it)
+                })
+                rows.add(listOf("£", "¢", "€", "¥", "^", "°", "=", "{", "}", "\\").map {
+                    KeyCap(it, it)
+                })
+                val r3 = mutableListOf<KeyCap>()
+                r3.add(KeyCap("MODE_SYM", "?123", weight = 1.48f, isFunc = true))
+                listOf("%", "©", "®", "™", "✓", "[", "]").forEach {
+                    r3.add(KeyCap(it, it))
+                }
+                r3.add(KeyCap("BACKSPACE", "⌫", weight = 1.48f, isFunc = true))
+                rows.add(r3)
+
+                rows.add(
+                    listOf(
+                        KeyCap("MODE_ABC", "ABC", weight = 1.45f, isFunc = true),
+                        KeyCap("<", "<", weight = 0.95f, isFunc = true),
+                        KeyCap("SPACE", "space", weight = 4.6f),
+                        KeyCap(">", ">", weight = 0.95f, isFunc = true),
+                        KeyCap("ENTER", "↵", weight = 1.55f, isFunc = true, isAccent = true)
+                    )
+                )
+            }
+        }
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val w = MeasureSpec.getSize(widthMeasureSpec)
-        val h = topPad + stripH + stripGap + rows.size * keyH + (rows.size - 1) * rowGap + bottomPad + navInset
-        setMeasuredDimension(w, h.toInt())
+        val stripHeight = dp(44f)
+        val rowCount = rows.size
+        val baseRowH = dp(51f) * Storage.keyHeightScale
+        val bottomPad = dp(10f)
+        val totalH = (stripHeight + (rowCount * baseRowH) + bottomPad).toInt()
+        setMeasuredDimension(w, totalH)
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        layoutKeys()
-        layoutStrip()
+        computeKeyBounds(w.toFloat(), h.toFloat())
     }
 
-    private fun layoutKeys() {
-        var y = topPad + stripH + stripGap
-        for (row in rows) {
-            val totalWeight = row.sumOf { it.weight.toDouble() }.toFloat()
-            val avail = width - 2 * sidePad - (row.size - 1) * keyGap
-            val unit = avail / totalWeight
-            var x = sidePad
-            for (k in row) {
-                val w = k.weight * unit
-                k.rect.set(x, y, x + w, y + keyH)
-                x += w + keyGap
-            }
-            y += keyH + rowGap
-        }
-    }
+    private fun computeKeyBounds(w: Float, h: Float) {
+        val stripH = dp(44f)
 
-    private val stripPill = RectF()
-    private var slotLeft = 0f
-    private var slotW = 0f
+        // Left action icon (Settings), 3 Gboard suggestion slots, right action icon (Globe/IME)
+        val sideBtnW = dp(42f)
+        settingsChipRect.set(dp(4f), dp(4f), sideBtnW, stripH - dp(4f))
+        imeSwitchChipRect.set(w - sideBtnW, dp(4f), w - dp(4f), stripH - dp(4f))
 
-    private fun layoutStrip() {
-        strip.clear()
-        if (width == 0) return
-        stripPill.set(sidePad, topPad, width - sidePad, topPad + stripH)
-        val cy = stripPill.centerY()
-        val mic = dp(42f)
-        val micRight = stripPill.right - dp(5f)
-        strip.add(StripTarget(RectF(micRight - mic, cy - mic / 2, micRight, cy + mic / 2), action = ToolbarAction.MIC))
-
-        if (slots.isEmpty()) {
-            val tool = dp(40f)
-            val icons = listOf<Pair<ToolbarAction?, Boolean>>(
-                null to true, // emoji panel
-                ToolbarAction.CLIPBOARD to false,
-                ToolbarAction.SETTINGS to false,
+        val stripLeft = sideBtnW + dp(2f)
+        val stripRight = w - sideBtnW - dp(2f)
+        val slotW = (stripRight - stripLeft) / 3f
+        for (i in 0..2) {
+            suggestionRects[i].set(
+                stripLeft + i * slotW,
+                dp(3f),
+                stripLeft + (i + 1) * slotW,
+                stripH - dp(3f)
             )
-            icons.forEachIndexed { i, (action, isEmoji) ->
-                val left = stripPill.left + dp(6f) + i * (tool + dp(6f))
-                strip.add(StripTarget(RectF(left, cy - tool / 2, left + tool, cy + tool / 2), action = action, emoji = isEmoji))
-            }
-            // bitKeys' own "hide keyboard" arrow, next to the mic
-            val hideRight = micRight - mic - dp(6f)
-            strip.add(StripTarget(RectF(hideRight - tool, cy - tool / 2, hideRight, cy + tool / 2), action = ToolbarAction.HIDE))
-        } else {
-            slotLeft = stripPill.left + dp(8f)
-            val right = micRight - mic - dp(6f)
-            slotW = (right - slotLeft) / 3f
-            slots.forEachIndexed { i, word ->
-                if (word.isNotEmpty()) {
-                    val l = slotLeft + i * slotW
-                    strip.add(StripTarget(RectF(l, cy - dp(20f), l + slotW, cy + dp(20f)), word = word, slot = i))
-                }
+        }
+
+        val keyboardTop = stripH + dp(2f)
+        val keyboardBottom = h - dp(8f)
+        val availH = max(dp(160f), keyboardBottom - keyboardTop)
+        val rowH = availH / rows.size.toFloat()
+
+        val hGap = if (Storage.keyBorders) dp(3.0f) else dp(1.5f)
+        val vGap = if (Storage.keyBorders) dp(4.2f) else dp(2.0f)
+
+        rows.forEachIndexed { rIdx, row ->
+            val top = keyboardTop + rIdx * rowH + vGap
+            val bottom = keyboardTop + (rIdx + 1) * rowH - vGap
+            val totalWeight = row.sumOf { it.weight.toDouble() }.toFloat()
+
+            // Indent 9-key home row slightly like Gboard
+            val sideInset = if (row.size == 9 && mode == Mode.LETTERS) w * 0.048f else dp(4f)
+            val usableW = w - (sideInset * 2f)
+            var cursorX = sideInset
+
+            row.forEach { key ->
+                val kw = usableW * (key.weight / totalWeight)
+                key.rect.set(
+                    cursorX + hGap,
+                    top,
+                    cursorX + kw - hGap,
+                    bottom
+                )
+                cursorX += kw
             }
         }
-    }
-
-    // ---------------------------------------------------------------- drawing
-
-    private val sheetRadius = dp(28f)
-    private val wavePath = Path()
-    private val wavePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeCap = Paint.Cap.ROUND
-        strokeJoin = Paint.Join.ROUND
     }
 
     override fun onDraw(canvas: Canvas) {
-        // Sheet with soft top corners, like the home-screen widgets.
-        fillPaint.color = palette.bg
-        canvas.drawRoundRect(0f, 0f, width.toFloat(), height + sheetRadius, sheetRadius, sheetRadius, fillPaint)
-        drawStrip(canvas)
-        drawKeys(canvas)
-    }
-
-    private fun drawStrip(canvas: Canvas) {
-        fillPaint.color = palette.strip
-        canvas.drawRoundRect(stripPill, stripPill.height() / 2, stripPill.height() / 2, fillPaint)
-
-        if (slots.isNotEmpty() && strip.any { it.word != null }) {
-            fillPaint.color = palette.text
-            fillPaint.alpha = 90
-            val cy = stripPill.centerY()
-            for (i in 1..2) {
-                val x = slotLeft + i * slotW
-                canvas.drawRect(x - dp(0.5f), cy - dp(11f), x + dp(0.5f), cy + dp(11f), fillPaint)
-            }
-            fillPaint.alpha = 255
+        super.onDraw(canvas)
+        if (rows.isEmpty() || rows[0].isEmpty() || rows[0][0].rect.isEmpty) {
+            computeKeyBounds(width.toFloat(), height.toFloat())
         }
-        val iconSize = dp(21f)
-        for (t in strip) {
-            val r = t.rect
-            val pressed = t in pressedStrip
-            when {
-                t.word != null -> {
-                    if (pressed) {
-                        fillPaint.color = palette.pressed
-                        canvas.drawRoundRect(r, r.height() / 2, r.height() / 2, fillPaint)
-                    }
-                    val best = t.slot == 1
-                    textPaint.color = palette.text
-                    textPaint.textSize = sp(16f)
-                    textPaint.typeface = if (best) Typeface.create(Typeface.DEFAULT, 700, false) else Typeface.DEFAULT
-                    val label = ellipsize(t.word, textPaint, r.width() - dp(8f))
-                    canvas.drawText(label, r.centerX(), baseline(r, textPaint), textPaint)
-                    textPaint.typeface = Typeface.DEFAULT
+
+        // 1. Board Background
+        bgPaint.color = theme.boardBg
+        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), bgPaint)
+
+        // 2. Gboard Top Suggestion Strip
+        stripPaint.color = theme.stripBg
+        canvas.drawRect(0f, 0f, width.toFloat(), dp(44f), stripPaint)
+
+        // Left Settings Icon Pill & Right Globe Icon Pill
+        subTextPaint.color = theme.subText
+        subTextPaint.textSize = sp(15f)
+        canvas.drawText("⚙", settingsChipRect.centerX(), settingsChipRect.centerY() + dp(5f), subTextPaint)
+        canvas.drawText("🌐", imeSwitchChipRect.centerX(), imeSwitchChipRect.centerY() + dp(5f), subTextPaint)
+
+        // Gboard 3-slot layout:
+        // Center slot (slot 1) = Primary Bold / Autocorrect
+        // Left slot (slot 0) = Exact typed or 2nd suggestion
+        // Right slot (slot 2) = 3rd suggestion
+        val slotDisplay = arrayOf(
+            suggestions.getOrNull(1) ?: "",
+            suggestions.getOrNull(0) ?: "",
+            suggestions.getOrNull(2) ?: ""
+        )
+
+        dividerPaint.color = theme.dividerColor
+        dividerPaint.strokeWidth = dp(1f)
+
+        for (i in 0..2) {
+            val r = suggestionRects[i]
+            val word = slotDisplay[i]
+            if (word.isNotEmpty()) {
+                val isCenterPrimary = (i == 1)
+                if (isCenterPrimary && primaryHighlight != null && Storage.autoCorrect) {
+                    // Subtle Gboard pill highlight behind active autocorrect
+                    keyPaint.color = theme.keyBg
+                    val pill = RectF(r.left + dp(6f), r.top + dp(3f), r.right - dp(6f), r.bottom - dp(3f))
+                    canvas.drawRoundRect(pill, dp(16f), dp(16f), keyPaint)
                 }
-                t.action == ToolbarAction.HIDE -> {
-                    if (pressed) {
-                        fillPaint.color = palette.pressed
-                        canvas.drawCircle(r.centerX(), r.centerY(), r.width() / 2, fillPaint)
-                    }
-                    Icons.draw(canvas, Icon.CHEVRON_DOWN, r.centerX(), r.centerY(), dp(26f), palette.text, weight = 2.2f)
-                }
-                t.action == ToolbarAction.MIC -> {
-                    fillPaint.color = palette.micBg
-                    canvas.drawCircle(r.centerX(), r.centerY(), r.width() / 2 * if (pressed) 0.92f else 1f, fillPaint)
-                    Icons.draw(canvas, Icon.MIC, r.centerX(), r.centerY(), dp(22f), palette.micFg, weight = 2f)
-                }
-                else -> {
-                    // toolbar squircles, like the app icons
-                    fillPaint.color = palette.tool
-                    tmp.set(r)
-                    if (pressed) tmp.inset(dp(1.5f), dp(1.5f))
-                    canvas.drawRoundRect(tmp, dp(14f), dp(14f), fillPaint)
-                    val icon = when {
-                        t.emoji -> Icon.EMOJI
-                        t.action == ToolbarAction.CLIPBOARD -> Icon.CLIPBOARD
-                        else -> Icon.SETTINGS
-                    }
-                    Icons.draw(canvas, icon, r.centerX(), r.centerY(), if (icon == Icon.EMOJI) iconSize else dp(20f), palette.onTool, weight = 2f)
-                }
+
+                val paint = if (isCenterPrimary) boldTextPaint else textPaint
+                paint.textSize = sp(15.5f)
+                paint.color = if (isCenterPrimary && primaryHighlight != null) theme.accentBg else theme.keyText
+
+                val displayWord = if (word.length > 13) word.take(12) + "…" else word
+                val fm = paint.fontMetrics
+                val textY = r.centerY() - (fm.ascent + fm.descent) / 2f
+                canvas.drawText(displayWord, r.centerX(), textY, paint)
+            }
+
+            if (i < 2) {
+                canvas.drawLine(r.right, dp(11f), r.right, dp(33f), dividerPaint)
             }
         }
-    }
 
-    private fun drawKeys(canvas: Canvas) {
-        val baseRadius = dp(Themes.keyRadiusDp(prefs.shape))
-        val square = prefs.shape == "square"
-        val upper = mode == Mode.LETTERS && shift != Shift.OFF
-        for (row in rows) for (k in row) {
-            if (k.kind == Kind.SPACER) continue
-            val pressed = k in pressedKeys
-            tmp.set(k.rect)
-            val cx = tmp.centerX()
-            val cy = tmp.centerY()
+        // 3. Draw Keys
+        val corner = dp(theme.cornerRadiusDp)
+        rows.forEach { row ->
+            row.forEach { key ->
+                val isPressed = (activeKey === key)
 
-            if (k.kind == Kind.ENTER) {
-                // Scalloped "cookie" Enter, like the date widget.
-                val radius = min(tmp.height() / 2f + dp(4f), tmp.width() / 2f) * if (pressed) 0.9f else 1f
-                fillPaint.color = palette.accent
-                Shapes.drawCookie(canvas, cx, cy, radius, fillPaint)
-                val icon = when (enterStyle) {
-                    EnterStyle.SEARCH -> Icon.SEARCH
-                    EnterStyle.DONE -> Icon.DONE
-                    EnterStyle.ENTER -> Icon.NEWLINE
-                    else -> Icon.ARROW
+                keyPaint.color = when {
+                    key.isAccent -> theme.accentBg
+                    isPressed -> theme.keyPressedBg
+                    key.isFunc -> theme.funcKeyBg
+                    Storage.keyBorders -> theme.keyBg
+                    else -> theme.boardBg
                 }
-                Icons.draw(canvas, icon, cx, cy, dp(23f), palette.onAccent, weight = 2.4f)
-                continue
-            }
 
-            if (pressed) tmp.inset(dp(1.5f), dp(1.5f))
-            val isMod = k.mod || k.kind == Kind.SHIFT || k.kind == Kind.DELETE
-            val bg = when {
-                pressed && isMod -> blend(palette.mod, palette.onMod, 0.18f)
-                pressed -> palette.pressed
-                isMod -> palette.mod
-                else -> palette.key
-            }
-            val wide = k.kind == Kind.SPACE || k.kind == Kind.MODE || k.kind == Kind.ABC || k.kind == Kind.NUMPAD
-            val r = if (wide && !square) tmp.height() / 2 else min(baseRadius, min(tmp.width(), tmp.height()) / 2)
-
-            fillPaint.color = bg
-            canvas.drawRoundRect(tmp, r, r, fillPaint)
-            if (prefs.borders) {
-                borderPaint.color = palette.border
-                canvas.drawRoundRect(tmp, r, r, borderPaint)
-            }
-
-            val fg = if (isMod) palette.onMod else palette.text
-            when (k.kind) {
-                Kind.CHAR -> {
-                    textPaint.color = fg
-                    textPaint.textSize = sp(if (mode == Mode.NUMPAD) 26f else 23f)
-                    val label = if (upper && k.label[0].isLetter()) k.label.uppercase() else k.label
-                    canvas.drawText(label, cx, baseline(tmp, textPaint), textPaint)
-                    if (k.alt != null) {
-                        textPaint.color = palette.sub
-                        textPaint.textSize = sp(10f)
-                        canvas.drawText(k.alt, tmp.right - dp(8f), tmp.top + dp(13f), textPaint)
+                if (Storage.keyBorders || key.isFunc || key.isAccent || isPressed || key.code == "SPACE") {
+                    val drawRect = if (key.code == "SPACE" && !Storage.keyBorders) {
+                        RectF(key.rect.left, key.rect.top + dp(5f), key.rect.right, key.rect.bottom - dp(5f))
+                    } else key.rect
+                    if (key.code == "SPACE" && !Storage.keyBorders) {
+                        keyPaint.color = theme.keyBg
                     }
+                    canvas.drawRoundRect(drawRect, corner, corner, keyPaint)
                 }
-                Kind.MODE, Kind.PAGE, Kind.ABC, Kind.NUMPAD -> {
-                    labelPaint.color = fg
-                    labelPaint.textSize = sp(15f)
-                    canvas.drawText(k.label, cx, baseline(tmp, labelPaint), labelPaint)
+
+                val labelPaint = if (key.isFunc || key.isAccent) boldTextPaint else textPaint
+                labelPaint.color = when {
+                    key.isAccent -> theme.accentText
+                    key.code == "SHIFT" && shiftState == ShiftState.CAPS_LOCK -> theme.accentBg
+                    key.code == "SPACE" -> theme.subText
+                    else -> theme.keyText
                 }
-                Kind.SPACE -> {
-                    // The wavy line from the volume slider.
-                    val inset = tmp.width() * 0.09f
-                    Shapes.squiggle(wavePath, tmp.left + inset, tmp.right - inset, cy, dp(4f), 4f)
-                    wavePaint.color = palette.wave
-                    wavePaint.strokeWidth = dp(3f)
-                    canvas.drawPath(wavePath, wavePaint)
+                labelPaint.textSize = when {
+                    key.code == "SPACE" -> sp(13f)
+                    key.label.length > 1 -> sp(13.5f)
+                    else -> sp(20.5f)
                 }
-                Kind.SHIFT -> Icons.draw(
-                    canvas, if (shift == Shift.LOCKED) Icon.SHIFT_LOCK else Icon.SHIFT,
-                    cx, cy, dp(23f), fg, filled = shift != Shift.OFF,
-                )
-                Kind.DELETE -> Icons.draw(canvas, Icon.DELETE, cx, cy, dp(25f), fg, weight = 1.9f)
-                Kind.ENTER, Kind.SPACER -> Unit
+
+                val fm = labelPaint.fontMetrics
+                val cy = key.rect.centerY() - (fm.ascent + fm.descent) / 2f
+                canvas.drawText(key.label, key.rect.centerX(), cy, labelPaint)
+
+                // Top-right secondary number hint on Q-P row when number row is hidden
+                val hint = numberHints[key.code.lowercase()]
+                if (hint != null && !Storage.showNumberRow && mode == Mode.LETTERS) {
+                    subTextPaint.color = theme.subText
+                    subTextPaint.textSize = sp(9.5f)
+                    canvas.drawText(
+                        hint,
+                        key.rect.right - dp(7f),
+                        key.rect.top + dp(11f),
+                        subTextPaint
+                    )
+                }
             }
+        }
+
+        // 4. Floating Gboard Key Preview Popup on active character key
+        val pressed = activeKey
+        if (pressed != null && !pressed.isFunc && pressed.code != "SPACE") {
+            val popW = max(pressed.rect.width() * 1.28f, dp(46f))
+            val popH = pressed.rect.height() * 1.32f
+            val popLeft = (pressed.rect.centerX() - popW / 2f).coerceIn(dp(4f), width - popW - dp(4f))
+            val popTop = max(dp(2f), pressed.rect.top - popH - dp(6f))
+            val popRect = RectF(popLeft, popTop, popLeft + popW, popTop + popH)
+
+            popupPaint.color = theme.popupBg
+            canvas.drawRoundRect(popRect, dp(12f), dp(12f), popupPaint)
+
+            boldTextPaint.color = theme.keyText
+            boldTextPaint.textSize = sp(26f)
+            val fm = boldTextPaint.fontMetrics
+            val ty = popRect.centerY() - (fm.ascent + fm.descent) / 2f
+            canvas.drawText(pressed.label, popRect.centerX(), ty, boldTextPaint)
         }
     }
 
-    private fun blend(a: Int, b: Int, t: Float): Int = Color.rgb(
-        (Color.red(a) + (Color.red(b) - Color.red(a)) * t).toInt(),
-        (Color.green(a) + (Color.green(b) - Color.green(a)) * t).toInt(),
-        (Color.blue(a) + (Color.blue(b) - Color.blue(a)) * t).toInt(),
-    )
+    /**
+     * Finds the closest key using cushioned hitboxes so slightly off-center presses
+     * still land on the intended key.
+     */
+    private fun findKeyAt(x: Float, y: Float): KeyCap? {
+        if (y <= dp(44f)) return null
+        var bestKey: KeyCap? = null
+        var bestDist = Float.MAX_VALUE
 
-    private fun baseline(r: RectF, p: Paint) = r.centerY() - (p.descent() + p.ascent()) / 2f
-
-    private fun ellipsize(s: String, p: Paint, max: Float): String {
-        if (p.measureText(s) <= max) return s
-        var end = s.length
-        while (end > 1 && p.measureText(s, 0, end) + p.measureText("…") > max) end--
-        return s.substring(0, end) + "…"
-    }
-
-    // ---------------------------------------------------------------- touch
-
-    private fun findKey(x: Float, y: Float): Key? {
-        val half = rowGap / 2
         for (row in rows) {
-            val first = row.firstOrNull() ?: continue
-            if (y < first.rect.top - half || y > first.rect.bottom + half) continue
-            // The key whose bounds contain x wins; gaps and spacers go to the key whose
-            // nearest EDGE is closest (not center, or wide keys like space lose their ends).
-            val real = row.filter { it.kind != Kind.SPACER }
-            real.firstOrNull { x >= it.rect.left && x <= it.rect.right }?.let { return it }
-            return real.minByOrNull { k ->
-                when {
+            for (k in row) {
+                if (k.rect.contains(x, y)) return k
+                val dx = when {
                     x < k.rect.left -> k.rect.left - x
                     x > k.rect.right -> x - k.rect.right
                     else -> 0f
                 }
+                val dy = when {
+                    y < k.rect.top -> k.rect.top - y
+                    y > k.rect.bottom -> y - k.rect.bottom
+                    else -> 0f
+                }
+                val dist = hypot(dx, dy)
+                if (dist < bestDist && dist <= dp(18f)) {
+                    bestDist = dist
+                    bestKey = k
+                }
             }
         }
-        return null
+        return bestKey
     }
 
-    private fun findStrip(x: Float, y: Float): StripTarget? {
-        if (y > topPad + stripH + stripGap / 2) return null
-        return strip.firstOrNull { x >= it.rect.left && x <= it.rect.right }
+    private fun triggerHaptic() {
+        if (!Storage.hapticEnabled) return
+        try {
+            val vib = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val vm = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+                vm.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vib.vibrate(VibrationEffect.createOneShot(Storage.hapticStrength.toLong().coerceIn(5L, 60L), VibrationEffect.DEFAULT_AMPLITUDE))
+            } else {
+                @Suppress("DEPRECATION")
+                vib.vibrate(15L)
+            }
+        } catch (_: Exception) {
+        }
     }
 
-    override fun onTouchEvent(e: MotionEvent): Boolean {
-        when (e.actionMasked) {
-            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
-                val i = e.actionIndex
-                val x = e.getX(i)
-                val y = e.getY(i)
-                // rollover: a new finger commits any letter still held by another finger
-                for (other in pointers.values) {
-                    val k = other.key
-                    if (k != null && k.kind == Kind.CHAR && !other.longFired) {
-                        cancelTimers(other)
-                        pressedKeys.remove(k)
-                        commitChar(k)
-                        other.key = null
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        val x = event.x
+        val y = event.y
+
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                downX = x
+                downY = y
+                isSpaceScrubbing = false
+                lastScrubX = x
+
+                if (y <= dp(44f)) {
+                    triggerHaptic()
+                    return true
+                }
+
+                activeKey = findKeyAt(x, y)
+                if (activeKey != null) {
+                    triggerHaptic()
+                    invalidate()
+                }
+                return true
+            }
+
+            MotionEvent.ACTION_MOVE -> {
+                // Spacebar cursor trackpad scrubbing
+                if (activeKey?.code == "SPACE") {
+                    val deltaX = x - lastScrubX
+                    if (abs(x - downX) > dp(14f) || isSpaceScrubbing) {
+                        isSpaceScrubbing = true
+                        val step = dp(11f)
+                        if (abs(deltaX) >= step) {
+                            val ticks = (deltaX / step).toInt()
+                            if (ticks != 0) {
+                                listener?.onCursorMove(ticks)
+                                triggerHaptic()
+                                lastScrubX += ticks * step
+                            }
+                        }
+                        return true
                     }
                 }
-                val key = findKey(x, y)
-                val target = if (key == null) findStrip(x, y) else null
-                val p = Pointer(e.getPointerId(i), key, target, x)
-                pointers[p.id] = p
-                press(p)
+
+                // Backspace swipe-left to delete whole word
+                if (activeKey?.code == "BACKSPACE" && (downX - x) > dp(42f)) {
+                    listener?.onDeleteWord()
+                    triggerHaptic()
+                    activeKey = null
+                    invalidate()
+                    return true
+                }
+
+                val hovered = findKeyAt(x, y)
+                if (hovered !== activeKey) {
+                    activeKey = hovered
+                    invalidate()
+                }
+                return true
             }
-            MotionEvent.ACTION_MOVE -> {
-                for (i in 0 until e.pointerCount) {
-                    val p = pointers[e.getPointerId(i)] ?: continue
-                    val k = p.key ?: continue
-                    if (k.kind == Kind.SPACE) {
-                        val step = dp(14f)
-                        val dx = e.getX(i) - p.anchorX
-                        val steps = (dx / step).toInt()
-                        if (steps != 0) {
-                            if (!p.cursorMode) {
-                                p.cursorMode = true
-                                cancelTimers(p)
+
+            MotionEvent.ACTION_UP -> {
+                if (isSpaceScrubbing) {
+                    isSpaceScrubbing = false
+                    activeKey = null
+                    invalidate()
+                    return true
+                }
+
+                // Top bar tap
+                if (y <= dp(44f) && downY <= dp(44f)) {
+                    if (settingsChipRect.contains(x, y)) {
+                        listener?.onOpenSettings()
+                        return true
+                    }
+                    if (imeSwitchChipRect.contains(x, y)) {
+                        listener?.onSwitchIme()
+                        return true
+                    }
+                    val slotDisplay = arrayOf(
+                        suggestions.getOrNull(1) ?: "",
+                        suggestions.getOrNull(0) ?: "",
+                        suggestions.getOrNull(2) ?: ""
+                    )
+                    for (i in 0..2) {
+                        if (suggestionRects[i].contains(x, y)) {
+                            val picked = slotDisplay[i]
+                            if (picked.isNotEmpty()) {
+                                listener?.onSuggestionClicked(picked, i)
                             }
-                            p.anchorX += steps * step
-                            listener?.onCursorMove(steps)
+                            return true
                         }
                     }
+                    return true
                 }
+
+                val released = activeKey ?: findKeyAt(x, y)
+                activeKey = null
+                invalidate()
+
+                if (released != null) {
+                    handleKeyTap(released)
+                }
+                return true
             }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
-                val p = pointers.remove(e.getPointerId(e.actionIndex))
-                if (p != null) release(p, commit = true)
-            }
+
             MotionEvent.ACTION_CANCEL -> {
-                for (p in pointers.values) release(p, commit = false)
-                pointers.clear()
+                activeKey = null
+                isSpaceScrubbing = false
+                invalidate()
+                return true
             }
         }
-        invalidate()
-        return true
+        return super.onTouchEvent(event)
     }
 
-    private fun press(p: Pointer) {
-        val k = p.key
-        val t = p.strip
-        if (k == null && t == null) return
-        feedback(k?.kind)
-        if (t != null) {
-            pressedStrip.add(t)
-            return
-        }
-        if (k == null) return
-        pressedKeys.add(k)
-        when (k.kind) {
-            Kind.DELETE -> {
-                listener?.onDelete()
-                val r = object : Runnable {
-                    override fun run() {
-                        listener?.onDelete()
-                        uiHandler.postDelayed(this, 45)
-                    }
+    private fun handleKeyTap(key: KeyCap) {
+        when (key.code) {
+            "SHIFT" -> {
+                val now = System.currentTimeMillis()
+                shiftState = when {
+                    shiftState == ShiftState.SHIFTED && (now - lastShiftTapTime) < 380L -> ShiftState.CAPS_LOCK
+                    shiftState == ShiftState.LOWER -> ShiftState.SHIFTED
+                    else -> ShiftState.LOWER
                 }
-                p.repeat = r
-                uiHandler.postDelayed(r, 380)
+                lastShiftTapTime = now
             }
-            Kind.SHIFT -> {
-                val now = SystemClock.uptimeMillis()
-                shift = when {
-                    shift == Shift.LOCKED -> Shift.OFF
-                    shift == Shift.ON && now - lastShiftTap < 320 -> Shift.LOCKED
-                    shift == Shift.ON -> Shift.OFF
-                    else -> Shift.ON
-                }
-                lastShiftTap = now
-            }
-            Kind.CHAR -> {
-                val alt = k.alt
-                if (alt != null) {
-                    val r = Runnable {
-                        p.longFired = true
-                        pressedKeys.remove(k)
-                        feedback(Kind.CHAR)
-                        listener?.onText(alt)
-                        invalidate()
-                    }
-                    p.longPress = r
-                    uiHandler.postDelayed(r, 350)
+            "BACKSPACE" -> listener?.onBackspace()
+            "SPACE" -> listener?.onSpace()
+            "ENTER" -> listener?.onEnter()
+            "MODE_SYM" -> mode = Mode.SYMBOLS
+            "MODE_SYM2" -> mode = Mode.SYMBOLS_MORE
+            "MODE_ABC" -> mode = Mode.LETTERS
+            else -> {
+                listener?.onCharacter(key.code)
+                if (shiftState == ShiftState.SHIFTED) {
+                    shiftState = ShiftState.LOWER
                 }
             }
-            else -> Unit
         }
     }
-
-    private fun release(p: Pointer, commit: Boolean) {
-        cancelTimers(p)
-        p.key?.let { pressedKeys.remove(it) }
-        p.strip?.let { pressedStrip.remove(it) }
-        if (!commit) return
-
-        p.key?.let { k ->
-            when (k.kind) {
-                Kind.CHAR -> if (!p.longFired) commitChar(k)
-                Kind.SPACE -> if (!p.cursorMode) listener?.onText(" ")
-                Kind.ENTER -> listener?.onEnter()
-                Kind.MODE -> switchMode(if (mode == Mode.LETTERS) Mode.SYMBOLS else Mode.LETTERS)
-                Kind.PAGE -> switchMode(if (mode == Mode.SYMBOLS) Mode.SYMBOLS2 else Mode.SYMBOLS)
-                Kind.ABC -> switchMode(Mode.LETTERS)
-                Kind.NUMPAD -> openNumpad(phonePad)
-                else -> Unit
-            }
-        }
-        p.strip?.let { t ->
-            when {
-                t.word != null -> listener?.onSuggestion(t.word)
-                t.emoji -> listener?.onToolbar(ToolbarAction.EMOJI)
-                t.action != null -> listener?.onToolbar(t.action)
-            }
-        }
-    }
-
-    private fun commitChar(k: Key) {
-        val upper = mode == Mode.LETTERS && shift != Shift.OFF
-        val text = if (upper) k.label.uppercase() else k.label
-        if (shift == Shift.ON) shift = Shift.OFF
-        listener?.onText(text)
-    }
-
-    private fun cancelTimers(p: Pointer) {
-        p.longPress?.let { uiHandler.removeCallbacks(it) }
-        p.repeat?.let { uiHandler.removeCallbacks(it) }
-        p.longPress = null
-        p.repeat = null
-    }
-
-    private fun feedback(kind: Kind?) {
-        if (prefs.haptics) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-        if (prefs.sound) {
-            val fx = when (kind) {
-                Kind.DELETE -> AudioManager.FX_KEYPRESS_DELETE
-                Kind.SPACE -> AudioManager.FX_KEYPRESS_SPACEBAR
-                Kind.ENTER -> AudioManager.FX_KEYPRESS_RETURN
-                else -> AudioManager.FX_KEYPRESS_STANDARD
-            }
-            audio?.playSoundEffect(fx, -1f)
-        }
-    }
-
-    override fun onDetachedFromWindow() {
-        super.onDetachedFromWindow()
-        for (p in pointers.values) cancelTimers(p)
-        pointers.clear()
-        pressedKeys.clear()
-        pressedStrip.clear()
-    }
-
 }

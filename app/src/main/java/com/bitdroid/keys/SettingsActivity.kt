@@ -1,338 +1,468 @@
 package com.bitdroid.keys
 
-import android.Manifest
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.provider.Settings
 import android.text.InputType
-import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.view.WindowInsets
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
-import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Switch
 import android.widget.TextView
 
-/**
- * bitKeys settings: setup steps, theme cards, accent color, key shape and preferences.
- * Built in code (no XML layouts) to keep the app tiny and dependency-free.
- */
 class SettingsActivity : Activity() {
 
-    companion object {
-        const val EXTRA_REQUEST_MIC = "request_mic"
-        private const val REQ_MIC = 7
-        private val BLACK = 0xFF000000.toInt()
-        private val SURFACE = 0xFF121214.toInt()
-        private val TEXT = 0xFFF2F2F5.toInt()
-        private val SUB = 0xFFA0A0A8.toInt()
-        private val LINE = 0xFF2C2C31.toInt()
-    }
+    private lateinit var step1Badge: TextView
+    private lateinit var step2Badge: TextView
+    private lateinit var step1Button: Button
+    private lateinit var step2Button: Button
+    private lateinit var statusHeaderSub: TextView
+    private lateinit var livePreviewKeyboard: KeyboardView
 
-    private lateinit var column: LinearLayout
-    private lateinit var tryField: EditText
-    private var prefs = KeyboardPrefs()
-
-    private fun dp(v: Float) = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, resources.displayMetrics)
-    private fun dpi(v: Float) = dp(v).toInt()
+    private val bgPrimary = Color.parseColor("#000000")
+    private val cardSurface = Color.parseColor("#11141B")
+    private val cardBorder = Color.parseColor("#222836")
+    private val accentBlue = Color.parseColor("#A8C7FA")
+    private val accentDarkText = Color.parseColor("#062E6F")
+    private val textPrimary = Color.parseColor("#F2F4F8")
+    private val textSecondary = Color.parseColor("#9AA0A6")
+    private val successGreen = Color.parseColor("#81C995")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        prefs = KeyboardPrefs.load(this)
+        Storage.load(this)
+
+        window.statusBarColor = bgPrimary
+        window.navigationBarColor = bgPrimary
 
         val scroll = ScrollView(this).apply {
-            setBackgroundColor(BLACK)
-            clipToPadding = false
+            setBackgroundColor(bgPrimary)
             isFillViewport = true
         }
-        column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        scroll.addView(column, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        scroll.setOnApplyWindowInsetsListener { v, insets ->
-            val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.ime())
-            v.setPadding(dpi(20f), bars.top + dpi(12f), dpi(20f), bars.bottom + dpi(24f))
-            insets
-        }
-        setContentView(scroll)
 
-        tryField = EditText(this).apply {
-            hint = "Try bitKeys here"
-            setHintTextColor(SUB)
-            setTextColor(TEXT)
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(24), dp(20), dp(40))
+        }
+
+        // 1. Hero Header
+        val headerCard = createCard().apply {
+            setPadding(dp(22), dp(22), dp(22), dp(22))
+        }
+        val titleRow = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        val badgePill = TextView(this).apply {
+            text = "GBOARD ENGINE • MATERIAL 3"
+            setTextColor(accentBlue)
+            textSize = 11f
+            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+        }
+        val appTitle = TextView(this).apply {
+            text = "bitKeys"
+            setTextColor(textPrimary)
+            textSize = 30f
+            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+            setPadding(0, dp(4), 0, dp(4))
+        }
+        statusHeaderSub = TextView(this).apply {
+            text = "Spatial QWERTY Autocorrect & Pure AMOLED Keyboard"
+            setTextColor(textSecondary)
+            textSize = 14f
+        }
+        titleRow.addView(badgePill)
+        titleRow.addView(appTitle)
+        titleRow.addView(statusHeaderSub)
+        headerCard.addView(titleRow)
+        root.addView(headerCard, marginParams(bottom = 16))
+
+        // 2. Interactive 2-Step Setup Wizard Card
+        val setupCard = createCard()
+        setupCard.addView(sectionHeader("QUICK SETUP WIZARD", "Enable & activate bitKeys in 2 taps"))
+
+        // Step 1 Row
+        val step1Row = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(10), 0, dp(12))
+        }
+        step1Badge = TextView(this).apply {
+            text = "STEP 1 • Enable in Android Settings"
+            setTextColor(textPrimary)
+            textSize = 15f
+            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+        }
+        val step1Desc = TextView(this).apply {
+            text = "Toggle on bitKeys in your system On-screen keyboard list."
+            setTextColor(textSecondary)
+            textSize = 13f
+            setPadding(0, dp(2), 0, dp(10))
+        }
+        step1Button = createPillButton("1. Open Keyboard Settings", true) {
+            startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
+        }
+        step1Row.addView(step1Badge)
+        step1Row.addView(step1Desc)
+        step1Row.addView(step1Button)
+        setupCard.addView(step1Row)
+
+        // Step 2 Row
+        val step2Row = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(8), 0, dp(4))
+        }
+        step2Badge = TextView(this).apply {
+            text = "STEP 2 • Select bitKeys as Default"
+            setTextColor(textPrimary)
+            textSize = 15f
+            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+        }
+        val step2Desc = TextView(this).apply {
+            text = "Switch your active input method to bitKeys."
+            setTextColor(textSecondary)
+            textSize = 13f
+            setPadding(0, dp(2), 0, dp(10))
+        }
+        step2Button = createPillButton("2. Choose Input Method", false) {
+            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+            imm.showInputMethodPicker()
+        }
+        step2Row.addView(step2Badge)
+        step2Row.addView(step2Desc)
+        step2Row.addView(step2Button)
+        setupCard.addView(step2Row)
+        root.addView(setupCard, marginParams(bottom = 16))
+
+        // 3. Live Interactive Keyboard Preview & Typing Sandbox
+        val sandboxCard = createCard()
+        sandboxCard.addView(sectionHeader("LIVE TYPING SANDBOX", "Test spatial autocorrect, contractions & key feel right here"))
+
+        val testInput = EditText(this).apply {
+            hint = "Tap here & type fast (e.g. 'teh dont reciept')..."
+            setHintTextColor(textSecondary)
+            setTextColor(textPrimary)
             textSize = 16f
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or InputType.TYPE_TEXT_FLAG_MULTI_LINE
-            background = rounded(SURFACE, dp(24f))
-            setPadding(dpi(18f), dpi(14f), dpi(18f), dpi(14f))
-            minHeight = dpi(52f)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_AUTO_CORRECT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#1A1F2B"))
+                cornerRadius = dp(14).toFloat()
+                setStroke(dp(1), cardBorder)
+            }
+        }
+        sandboxCard.addView(testInput, marginParams(top = 8, bottom = 14))
+
+        livePreviewKeyboard = KeyboardView(this).apply {
+            updateSuggestions(listOf("don't", "dont", "done"), "don't", "dont")
+        }
+        sandboxCard.addView(
+            livePreviewKeyboard,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        )
+        root.addView(sandboxCard, marginParams(bottom = 16))
+
+        // 4. Theme Selector Card
+        val themeCard = createCard()
+        themeCard.addView(sectionHeader("GBOARD MATERIAL THEMES", "Instant live preview • Pure AMOLED ready"))
+
+        val themeButtonsContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(8), 0, 0)
         }
 
-        render()
-        if (intent?.getBooleanExtra(EXTRA_REQUEST_MIC, false) == true) requestMic()
+        fun rebuildThemeRows() {
+            themeButtonsContainer.removeAllViews()
+            Themes.ALL.forEach { t ->
+                val isSelected = (Storage.themeId == t.id)
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(16), dp(14), dp(16), dp(14))
+                    background = GradientDrawable().apply {
+                        setColor(if (isSelected) Color.parseColor("#1D2536") else Color.parseColor("#151922"))
+                        cornerRadius = dp(14).toFloat()
+                        setStroke(dp(if (isSelected) 2 else 1), if (isSelected) accentBlue else cardBorder)
+                    }
+                    setOnClickListener {
+                        Storage.themeId = t.id
+                        Storage.save(this@SettingsActivity)
+                        livePreviewKeyboard.refreshConfig()
+                        rebuildThemeRows()
+                    }
+                }
+                val nameTv = TextView(this).apply {
+                    text = if (isSelected) "✓  ${t.name}" else t.name
+                    setTextColor(if (isSelected) accentBlue else textPrimary)
+                    textSize = 15.5f
+                    typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+                }
+                val subTv = TextView(this).apply {
+                    text = t.subtitle
+                    setTextColor(textSecondary)
+                    textSize = 12.5f
+                    setPadding(0, dp(2), 0, 0)
+                }
+                row.addView(nameTv)
+                row.addView(subTv)
+                themeButtonsContainer.addView(row, marginParams(bottom = 10))
+            }
+        }
+        rebuildThemeRows()
+        themeCard.addView(themeButtonsContainer)
+        root.addView(themeCard, marginParams(bottom = 16))
+
+        // 5. Smart Autocorrect & Typing Engine Card
+        val typingCard = createCard()
+        typingCard.addView(sectionHeader("AUTOCORRECT & TYPING ENGINE", "Powered by QWERTY spatial proximity & Damerau-Levenshtein"))
+
+        typingCard.addView(
+            createToggleRow(
+                "Smart Spatial Autocorrect",
+                "Automatically fixes fat-finger typos, transpositions & contractions on space",
+                Storage.autoCorrect
+            ) {
+                Storage.autoCorrect = it
+                Storage.save(this)
+                livePreviewKeyboard.refreshConfig()
+            }
+        )
+        typingCard.addView(
+            createToggleRow(
+                "Aggressive Typo Recovery",
+                "Catches multi-letter slips & restores missing apostrophes (don't, I'm, can't)",
+                Storage.aggressiveAutocorrect
+            ) {
+                Storage.aggressiveAutocorrect = it
+                Storage.save(this)
+            }
+        )
+        typingCard.addView(
+            createToggleRow(
+                "Auto-Capitalize Sentences",
+                "Capitalize the first word after periods and new lines",
+                Storage.autoCapitalize
+            ) {
+                Storage.autoCapitalize = it
+                Storage.save(this)
+            }
+        )
+        typingCard.addView(
+            createToggleRow(
+                "Double-Space Period",
+                "Double tap spacebar to insert a period followed by a space",
+                Storage.doubleSpacePeriod
+            ) {
+                Storage.doubleSpacePeriod = it
+                Storage.save(this)
+            }
+        )
+        root.addView(typingCard, marginParams(bottom = 16))
+
+        // 6. Layout & Feel Card
+        val layoutCard = createCard()
+        layoutCard.addView(sectionHeader("LAYOUT & HAPTICS", "Customize Gboard key borders, number row & feedback"))
+
+        layoutCard.addView(
+            createToggleRow(
+                "Dedicated Number Row",
+                "Always show 1–0 number keys along the top row",
+                Storage.showNumberRow
+            ) {
+                Storage.showNumberRow = it
+                Storage.save(this)
+                livePreviewKeyboard.refreshConfig()
+            }
+        )
+        layoutCard.addView(
+            createToggleRow(
+                "Key Borders",
+                "Show sculpted Gboard rounded keycaps",
+                Storage.keyBorders
+            ) {
+                Storage.keyBorders = it
+                Storage.save(this)
+                livePreviewKeyboard.refreshConfig()
+            }
+        )
+        layoutCard.addView(
+            createToggleRow(
+                "Haptic Vibration on Keypress",
+                "Crisp tactile pulse when tapping keys or scrubbing cursor",
+                Storage.hapticEnabled
+            ) {
+                Storage.hapticEnabled = it
+                Storage.save(this)
+            }
+        )
+        root.addView(layoutCard, marginParams(bottom = 16))
+
+        // 7. About / Developer Attribution Card
+        val aboutCard = createCard()
+        aboutCard.addView(sectionHeader("ABOUT BITKEYS", "Engineered for speed, accuracy & clean Material You design"))
+        val devText = TextView(this).apply {
+            text = "Developed by Alex Desrosier\nPackage: com.bitdroid.keys • Gboard Spatial Engine v2.0"
+            setTextColor(textSecondary)
+            textSize = 13.5f
+            setLineSpacing(dp(3).toFloat(), 1f)
+            setPadding(0, dp(6), 0, 0)
+        }
+        aboutCard.addView(devText)
+        root.addView(aboutCard)
+
+        scroll.addView(root)
+        setContentView(scroll)
     }
 
     override fun onResume() {
         super.onResume()
-        render()
+        refreshSetupWizardState()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) render() // picks up the result of the input-method picker
-    }
-
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        render()
-    }
-
-    private fun requestMic() {
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQ_MIC)
+        if (hasFocus) {
+            refreshSetupWizardState()
         }
     }
 
-    private fun update(p: KeyboardPrefs) {
-        prefs = p
-        p.save(this)
-        render()
-    }
+    private fun refreshSetupWizardState() {
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        val enabledList = imm.enabledInputMethodList
+        val isEnabled = enabledList.any { it.packageName == packageName }
 
-    // ------------------------------------------------------------ state checks
+        val defaultIme = Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD) ?: ""
+        val isSelected = defaultIme.contains(packageName)
 
-    private fun imeEnabled(): Boolean {
-        val imm = getSystemService(InputMethodManager::class.java) ?: return false
-        return imm.enabledInputMethodList.any { it.packageName == packageName }
-    }
-
-    private fun imeSelected(): Boolean {
-        val id = Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD) ?: return false
-        return id.startsWith("$packageName/")
-    }
-
-    private fun micGranted() = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-
-    // ------------------------------------------------------------ UI
-
-    private fun render() {
-        val accent = Themes.accentColor(this, prefs.accent)
-        column.removeAllViews()
-
-        // Header
-        column.addView(text("bitKeys", 34f, TEXT, bold = true))
-        column.addView(text("The keyboard for bitDroid", 15f, SUB).also { it.setPadding(0, dpi(2f), 0, dpi(20f)) })
-
-        // Setup steps (hidden once everything is done)
-        val enabled = imeEnabled()
-        val selected = imeSelected()
-        val mic = micGranted()
-        if (!enabled || !selected || !mic) {
-            column.addView(section("SET UP", accent))
-            val card = card()
-            card.addView(step(1, "Turn on bitKeys", "Enable it in your keyboard list", enabled, accent, "Open") {
-                startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
-            })
-            card.addView(step(2, "Switch to bitKeys", "Make it your active keyboard", selected, accent, "Choose") {
-                getSystemService(InputMethodManager::class.java)?.showInputMethodPicker()
-            })
-            card.addView(step(3, "Allow the microphone", "Needed for voice typing", mic, accent, "Allow") { requestMic() })
-            column.addView(card)
+        if (isEnabled) {
+            step1Badge.text = "✓ STEP 1 COMPLETE • bitKeys is Enabled"
+            step1Badge.setTextColor(successGreen)
+            step1Button.text = "Enabled in Settings"
+        } else {
+            step1Badge.text = "STEP 1 • Enable in Android Settings"
+            step1Badge.setTextColor(textPrimary)
+            step1Button.text = "1. Open Keyboard Settings"
         }
 
-        // Try it
-        column.addView(section("TRY IT", accent))
-        (tryField.parent as? ViewGroup)?.removeView(tryField)
-        column.addView(tryField)
+        if (isSelected) {
+            step2Badge.text = "✓ STEP 2 COMPLETE • bitKeys is Your Active Keyboard"
+            step2Badge.setTextColor(successGreen)
+            step2Button.text = "Switch Keyboard"
+            statusHeaderSub.text = "✓ Active & Ready • Spatial QWERTY Autocorrect Online"
+            statusHeaderSub.setTextColor(successGreen)
+        } else {
+            step2Badge.text = "STEP 2 • Select bitKeys as Default"
+            step2Badge.setTextColor(textPrimary)
+            step2Button.text = "2. Choose Input Method"
+            statusHeaderSub.text = "Complete the 2-step setup below to start typing"
+            statusHeaderSub.setTextColor(textSecondary)
+        }
+    }
 
-        // Theme cards
-        column.addView(section("KEYBOARD THEME", accent))
-        Themes.THEMES.chunked(2).forEach { pair ->
-            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            pair.forEachIndexed { i, (id, name) ->
-                val item = LinearLayout(this).apply {
-                    orientation = LinearLayout.VERTICAL
-                    isClickable = true
-                    contentDescription = "$name theme"
-                    setOnClickListener { update(prefs.copy(theme = id)) }
-                }
-                item.addView(ThemePreviewView(this).apply {
-                    palette = Themes.palette(this@SettingsActivity, id, prefs.accent)
-                    shape = prefs.shape
-                    chosen = prefs.theme == id
-                }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpi(104f)))
-                val label = LinearLayout(this).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    setPadding(dpi(4f), dpi(8f), 0, dpi(14f))
-                }
-                label.addView(text(name, 14f, TEXT, medium = true))
-                if (id == "tonal") {
-                    label.addView(text("Default", 11f, BLACK, bold = true).apply {
-                        background = rounded(accent, dp(8f))
-                        setPadding(dpi(7f), dpi(2f), dpi(7f), dpi(2f))
-                    }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dpi(8f) })
-                }
-                item.addView(label)
-                row.addView(item, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                    if (i == 0) marginEnd = dpi(6f) else marginStart = dpi(6f)
-                })
+    private fun createCard(): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(18), dp(18), dp(18))
+            background = GradientDrawable().apply {
+                setColor(cardSurface)
+                cornerRadius = dp(20).toFloat()
+                setStroke(dp(1), cardBorder)
             }
-            column.addView(row)
         }
+    }
 
-        // Accent swatches
-        column.addView(section("ACCENT", accent))
-        val swatches = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        Themes.ACCENTS.forEach { (id, name) ->
-            val color = Themes.accentColor(this, id)
-            val isSel = prefs.accent == id
-            val dot = View(this).apply {
-                background = GradientDrawable().apply {
-                    shape = GradientDrawable.OVAL
-                    setColor(color)
-                    if (isSel) setStroke(dpi(3f), TEXT)
-                }
-                contentDescription = "$name accent" + if (isSel) ", selected" else ""
-                isClickable = true
-                setOnClickListener { update(prefs.copy(accent = id)) }
-            }
-            swatches.addView(dot, LinearLayout.LayoutParams(dpi(44f), dpi(44f)).apply { marginEnd = dpi(14f) })
+    private fun sectionHeader(title: String, subtitle: String): View {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, 0, 0, dp(8))
+            addView(TextView(this@SettingsActivity).apply {
+                text = title
+                setTextColor(accentBlue)
+                textSize = 11.5f
+                typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+            })
+            addView(TextView(this@SettingsActivity).apply {
+                text = subtitle
+                setTextColor(textSecondary)
+                textSize = 13f
+                setPadding(0, dp(2), 0, 0)
+            })
         }
-        column.addView(swatches)
-        column.addView(text("“Wallpaper” follows your Material You colors.", 13f, SUB).also { it.setPadding(0, dpi(8f), 0, 0) })
+    }
 
-        // Key shape segmented control
-        column.addView(section("KEY SHAPE", accent))
-        val seg = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            background = rounded(SURFACE, dp(24f))
-            setPadding(dpi(4f), dpi(4f), dpi(4f), dpi(4f))
-        }
-        Themes.SHAPES.forEach { (id, name) ->
-            val sel = prefs.shape == id
-            seg.addView(text(name, 14f, if (sel) BLACK else 0xFFC8C8CE.toInt(), medium = true).apply {
-                gravity = Gravity.CENTER
-                if (sel) background = rounded(accent, dp(20f))
-                isClickable = true
-                setOnClickListener { update(prefs.copy(shape = id)) }
-            }, LinearLayout.LayoutParams(0, dpi(44f), 1f))
-        }
-        column.addView(seg)
-
-        // Toggles
-        column.addView(section("PREFERENCES", accent))
-        column.addView(toggle("Autocorrect", "Fix misspelled words when you press space. Backspace right after to undo", prefs.autocorrect, accent) { update(prefs.copy(autocorrect = it)) })
-        column.addView(toggle("Auto-capitalization", "Capitalize the first letter of each sentence", prefs.autoCaps, accent) { update(prefs.copy(autoCaps = it)) })
-        column.addView(toggle("Number pad", "Show a big number pad in number and phone fields (or tap 1234 on the symbols page)", prefs.numpad, accent) { update(prefs.copy(numpad = it)) })
-        column.addView(toggle("Number row", "Always show 1–0 above the letters", prefs.numberRow, accent) { update(prefs.copy(numberRow = it)) })
-        column.addView(toggle("Key borders", "Outline each key", prefs.borders, accent) { update(prefs.copy(borders = it)) })
-        column.addView(toggle("Haptic feedback", "Vibrate on keypress", prefs.haptics, accent) { update(prefs.copy(haptics = it)) })
-        column.addView(toggle("Sound on keypress", "Play a soft click", prefs.sound, accent) { update(prefs.copy(sound = it)) })
-
-        // Footer
-        column.addView(Button(this).apply {
-            text = "Clear learned words"
-            setTextColor(TEXT)
+    private fun createPillButton(label: String, filled: Boolean, onClick: () -> Unit): Button {
+        return Button(this).apply {
+            text = label
             isAllCaps = false
-            background = rounded(SURFACE, dp(24f))
-            setOnClickListener {
-                Suggester(this@SettingsActivity).forgetAll()
-                text = "Learned words cleared"
+            textSize = 14.5f
+            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+            setTextColor(if (filled) accentDarkText else accentBlue)
+            setPadding(dp(18), dp(12), dp(18), dp(12))
+            background = GradientDrawable().apply {
+                setColor(if (filled) accentBlue else Color.parseColor("#1A2232"))
+                cornerRadius = dp(24).toFloat()
+                if (!filled) setStroke(dp(1), accentBlue)
             }
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpi(48f)).apply { topMargin = dpi(24f) })
-        column.addView(text("Made by Alex Desrosier · bitDroid", 13f, SUB).apply {
-            gravity = Gravity.CENTER
-            setPadding(0, dpi(24f), 0, 0)
-        })
-    }
-
-    private fun rounded(color: Int, radius: Float) = GradientDrawable().apply {
-        setColor(color)
-        cornerRadius = radius
-    }
-
-    private fun text(s: String, size: Float, color: Int, bold: Boolean = false, medium: Boolean = false) = TextView(this).apply {
-        text = s
-        textSize = size
-        setTextColor(color)
-        typeface = when {
-            bold -> Typeface.create(Typeface.DEFAULT, 600, false)
-            medium -> Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            else -> Typeface.DEFAULT
+            setOnClickListener { onClick() }
         }
     }
 
-    private fun section(title: String, accent: Int) = text(title, 13f, accent, bold = true).apply {
-        letterSpacing = 0.04f
-        setPadding(0, dpi(26f), 0, dpi(12f))
-    }
-
-    private fun card() = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        background = rounded(SURFACE, dp(24f))
-        setPadding(dpi(16f), dpi(8f), dpi(16f), dpi(8f))
-    }
-
-    private fun step(n: Int, title: String, sub: String, done: Boolean, accent: Int, action: String, onClick: () -> Unit): View {
+    private fun createToggleRow(
+        title: String,
+        subtitle: String,
+        initial: Boolean,
+        onToggle: (Boolean) -> Unit
+    ): View {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dpi(10f), 0, dpi(10f))
+            setPadding(0, dp(12), 0, dp(12))
         }
-        row.addView(text(if (done) "✓" else n.toString(), 15f, if (done) BLACK else TEXT, bold = true).apply {
-            gravity = Gravity.CENTER
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                if (done) setColor(accent) else setStroke(dpi(1.5f), LINE)
+        val textCol = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginEnd = dp(12)
             }
-        }, LinearLayout.LayoutParams(dpi(32f), dpi(32f)))
-        val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        texts.addView(text(title, 16f, TEXT))
-        texts.addView(text(sub, 13f, SUB))
-        row.addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dpi(14f) })
-        if (!done) {
-            row.addView(Button(this).apply {
-                text = action
-                isAllCaps = false
-                setTextColor(BLACK)
-                background = rounded(accent, dp(20f))
-                setOnClickListener { onClick() }
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dpi(40f)))
         }
+        textCol.addView(TextView(this).apply {
+            text = title
+            setTextColor(textPrimary)
+            textSize = 15.5f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        })
+        textCol.addView(TextView(this).apply {
+            text = subtitle
+            setTextColor(textSecondary)
+            textSize = 12.5f
+            setPadding(0, dp(2), 0, 0)
+        })
+
+        val sw = Switch(this).apply {
+            isChecked = initial
+            setOnCheckedChangeListener { _, checked -> onToggle(checked) }
+        }
+
+        row.addView(textCol)
+        row.addView(sw)
         return row
     }
 
-    @Suppress("DEPRECATION")
-    private fun toggle(title: String, sub: String, on: Boolean, accent: Int, onChange: (Boolean) -> Unit): View {
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            minimumHeight = dpi(60f)
+    private fun marginParams(top: Int = 0, bottom: Int = 0): LinearLayout.LayoutParams {
+        return LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply {
+            topMargin = dp(top)
+            bottomMargin = dp(bottom)
         }
-        val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        texts.addView(text(title, 16f, TEXT))
-        texts.addView(text(sub, 13f, SUB))
-        row.addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        val sw = Switch(this).apply {
-            isChecked = on
-            contentDescription = title
-            val states = arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf())
-            thumbTintList = ColorStateList(states, intArrayOf(BLACK, 0xFF8A8A93.toInt()))
-            trackTintList = ColorStateList(states, intArrayOf(accent, LINE))
-            setOnCheckedChangeListener { _, checked -> onChange(checked) }
-        }
-        row.addView(sw)
-        row.setOnClickListener { sw.toggle() }
-        return FrameLayout(this).apply { addView(row) }
     }
+
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 }
