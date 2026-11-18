@@ -1,319 +1,551 @@
 package com.bitdroid.keys
 
+import android.Manifest
+import android.content.ClipboardManager
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.graphics.Color
 import android.inputmethodservice.InputMethodService
+import android.os.Build
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.text.InputType
 import android.view.KeyEvent
 import android.view.View
+import android.view.ViewGroup
+import android.view.WindowInsets
+import android.view.WindowInsetsController
 import android.view.inputmethod.EditorInfo
 import android.widget.FrameLayout
+import android.widget.Toast
+import java.util.Locale
+import kotlin.math.abs
 
-class BitKeysService : InputMethodService(), KeyboardView.Listener, VoicePanelView.Listener {
+class BitKeysService : InputMethodService(),
+    KeyboardView.Listener,
+    VoicePanelView.Listener,
+    EmojiPanelView.Listener,
+    ClipboardPanelView.Listener {
 
-    private var rootContainer: FrameLayout? = null
-    private var keyboardView: KeyboardView? = null
-    private var voicePanelView: VoicePanelView? = null
+    private lateinit var keyboard: KeyboardView
+    private lateinit var voice: VoicePanelView
+    private lateinit var emoji: EmojiPanelView
+    private lateinit var clipboard: ClipboardPanelView
     private lateinit var suggester: Suggester
+    private var prefs = KeyboardPrefs()
 
-    private val currentWord = StringBuilder()
-    private var previousCommittedWord: String? = null
+    private val handler = Handler(Looper.getMainLooper())
+    private var recognizer: SpeechRecognizer? = null
+    @Volatile private var listening = false
+    private var needsLeadingSpace = false
 
-    private var lastOriginalTyped: String? = null
-    private var lastAutoCorrectedTo: String? = null
-    private var lastSpaceTime = 0L
+    private var lastCorrection: Triple<String, String, String>? = null
 
     override fun onCreate() {
         super.onCreate()
-        Storage.load(this)
         suggester = Suggester(this)
+        prefs = KeyboardPrefs.load(this)
+        runCatching {
+            val cm = getSystemService(ClipboardManager::class.java)
+            cm?.addPrimaryClipChangedListener {
+                if (::clipboard.isInitialized) {
+                    clipboard.syncFromSystemClipboard()
+                }
+            }
+        }
     }
 
     override fun onCreateInputView(): View {
-        Storage.load(this)
-        val container = FrameLayout(this)
-
-        val kv = KeyboardView(this).apply {
-            listener = this@BitKeysService
-            refreshConfig()
+        keyboard = KeyboardView(this).also { it.listener = this }
+        voice = VoicePanelView(this).also {
+            it.listener = this
+            it.visibility = View.GONE
         }
-        val vpv = VoicePanelView(this).apply {
-            listener = this@BitKeysService
-            theme = Themes.byId(Storage.themeId)
-            visibility = View.GONE
+        emoji = EmojiPanelView(this).also {
+            it.listener = this
+            it.visibility = View.GONE
         }
-
-        container.addView(kv)
-        container.addView(vpv)
-
-        rootContainer = container
-        keyboardView = kv
-        voicePanelView = vpv
-        refreshSuggestions()
-        return container
+        clipboard = ClipboardPanelView(this).also {
+            it.listener = this
+            it.visibility = View.GONE
+        }
+        return FrameLayout(this).apply {
+            addView(keyboard, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(voice, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(emoji, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(clipboard, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
     }
 
-    override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
+    override fun onStartInputView(info: EditorInfo, restarting: Boolean) {
         super.onStartInputView(info, restarting)
-        Storage.load(this)
-        suggester.reloadUserWords()
-        currentWord.clear()
-        lastOriginalTyped = null
-        lastAutoCorrectedTo = null
+        prefs = KeyboardPrefs.load(this)
+        keyboard.applyPrefs(prefs)
+        voice.setPalette(keyboard.palette())
+        emoji.setPalette(keyboard.palette(), prefs.shape)
+        clipboard.setPalette(keyboard.palette())
 
-        // Always ensure voice mic is shut off when switching fields unless user presses Mic
-        voicePanelView?.pauseListeningImmediate()
-        voicePanelView?.visibility = View.GONE
-        voicePanelView?.theme = Themes.byId(Storage.themeId)
+        if (!restarting) {
+            val cls = info.inputType and InputType.TYPE_MASK_CLASS
+            when (cls) {
+                InputType.TYPE_CLASS_NUMBER, InputType.TYPE_CLASS_PHONE, InputType.TYPE_CLASS_DATETIME ->
+                    if (prefs.numpad) keyboard.openNumpad(phone = cls == InputType.TYPE_CLASS_PHONE)
+                    else keyboard.switchMode(KeyboardView.Mode.SYMBOLS)
+                else -> keyboard.switchMode(KeyboardView.Mode.LETTERS)
+            }
+        }
+        keyboard.setEnterStyle(enterStyleFor(info))
+        styleSystemNavBar()
+        stopVoiceImmediate(hide = true)
+        showEmoji(false)
+        showClipboard(false)
+        refresh()
+    }
 
-        keyboardView?.visibility = View.VISIBLE
-        keyboardView?.refreshConfig()
-        updateAutoCapitalization()
-        refreshSuggestions()
+    override fun onWindowShown() {
+        super.onWindowShown()
+        styleSystemNavBar()
+    }
+
+    private fun styleSystemNavBar() {
+        val w = window?.window ?: return
+        @Suppress("DEPRECATION")
+        w.navigationBarColor = Color.TRANSPARENT
+        val light = ::keyboard.isInitialized && keyboard.palette().isLight
+        val flag = WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+        w.insetsController?.setSystemBarsAppearance(if (light) flag else 0, flag)
+        runCatching { w.decorView.windowInsetsController?.hide(WindowInsets.Type.captionBar()) }
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
-        // Immediately cut off mic hardware when keyboard hides
-        voicePanelView?.pauseListeningImmediate()
+        stopVoiceImmediate(hide = true)
         super.onFinishInputView(finishingInput)
     }
 
-    private fun updateAutoCapitalization() {
-        if (!Storage.autoCapitalize) return
-        val kv = keyboardView ?: return
-        if (kv.shiftState == KeyboardView.ShiftState.CAPS_LOCK) return
-
-        val ic = currentInputConnection ?: return
-        val before = ic.getTextBeforeCursor(3, 0)?.toString() ?: ""
-        val shouldShift = before.isEmpty() ||
-            before.endsWith(". ") ||
-            before.endsWith("! ") ||
-            before.endsWith("? ") ||
-            before.endsWith("\n")
-        kv.shiftState = if (shouldShift) KeyboardView.ShiftState.SHIFTED else KeyboardView.ShiftState.LOWER
+    override fun onDestroy() {
+        stopVoiceImmediate(hide = true)
+        super.onDestroy()
     }
 
-    private fun refreshSuggestions() {
-        val kv = keyboardView ?: return
-        val result = suggester.evaluate(currentWord.toString(), previousCommittedWord)
-        kv.updateSuggestions(result.candidates, result.primaryCorrection, currentWord.toString())
+    override fun onUpdateSelection(
+        oldSelStart: Int, oldSelEnd: Int, newSelStart: Int, newSelEnd: Int,
+        candidatesStart: Int, candidatesEnd: Int,
+    ) {
+        super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
+        if (!listening && ::keyboard.isInitialized) refresh()
     }
 
-    override fun onCharacter(ch: String) {
-        val ic = currentInputConnection ?: return
-        lastOriginalTyped = null
-        lastAutoCorrectedTo = null
+    private fun isPrivateField(info: EditorInfo?): Boolean {
+        if (info == null) return true
+        val v = info.inputType and InputType.TYPE_MASK_VARIATION
+        val cls = info.inputType and InputType.TYPE_MASK_CLASS
+        if (cls == InputType.TYPE_CLASS_TEXT && (
+                v == InputType.TYPE_TEXT_VARIATION_PASSWORD ||
+                    v == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
+                    v == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD
+                )
+        ) return true
+        if (cls == InputType.TYPE_CLASS_NUMBER && v == InputType.TYPE_NUMBER_VARIATION_PASSWORD) return true
+        if (info.inputType and InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS != 0) return true
+        return info.imeOptions and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING != 0
+    }
 
-        val isWordChar = ch.length == 1 && (ch[0].isLetter() || ch[0] == '\'')
-        if (isWordChar) {
-            currentWord.append(ch)
-            ic.commitText(ch, 1)
-            refreshSuggestions()
-        } else {
-            commitPendingWordWithAutocorrectIfApplicable()
-            ic.commitText(ch, 1)
-            updateAutoCapitalization()
-            refreshSuggestions()
+    private fun enterStyleFor(info: EditorInfo): KeyboardView.EnterStyle {
+        if (info.imeOptions and EditorInfo.IME_FLAG_NO_ENTER_ACTION != 0) return KeyboardView.EnterStyle.ENTER
+        return when (info.imeOptions and EditorInfo.IME_MASK_ACTION) {
+            EditorInfo.IME_ACTION_SEND -> KeyboardView.EnterStyle.SEND
+            EditorInfo.IME_ACTION_SEARCH -> KeyboardView.EnterStyle.SEARCH
+            EditorInfo.IME_ACTION_GO -> KeyboardView.EnterStyle.GO
+            EditorInfo.IME_ACTION_NEXT -> KeyboardView.EnterStyle.NEXT
+            EditorInfo.IME_ACTION_DONE -> KeyboardView.EnterStyle.DONE
+            else -> KeyboardView.EnterStyle.ENTER
         }
     }
 
-    private fun commitPendingWordWithAutocorrectIfApplicable(): Boolean {
+    private fun currentWord(): String {
+        val before = currentInputConnection?.getTextBeforeCursor(48, 0)?.toString() ?: return ""
+        return before.takeLastWhile { it.isLetterOrDigit() || it == '\'' }
+    }
+
+    private fun refresh() {
+        val ic = currentInputConnection ?: return
+        val info = currentInputEditorInfo
+        val caps = prefs.autoCaps && info != null && info.inputType != 0 && ic.getCursorCapsMode(info.inputType) != 0
+        keyboard.setAutoShift(caps)
+
+        val hasSelection = !ic.getSelectedText(0).isNullOrEmpty()
+        val word = currentWord()
+        keyboard.setSuggestions(
+            if (hasSelection || word.isEmpty() || isPrivateField(info) || keyboard.mode != KeyboardView.Mode.LETTERS) emptyList()
+            else suggester.slots(word, autocorrectAllowed())
+        )
+    }
+
+    private fun autocorrectAllowed(): Boolean {
+        val info = currentInputEditorInfo ?: return false
+        if (!prefs.autocorrect || isPrivateField(info)) return false
+        if (info.inputType and InputType.TYPE_MASK_CLASS != InputType.TYPE_CLASS_TEXT) return false
+        return when (info.inputType and InputType.TYPE_MASK_VARIATION) {
+            InputType.TYPE_TEXT_VARIATION_URI,
+            InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
+            InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS,
+            InputType.TYPE_TEXT_VARIATION_FILTER,
+            InputType.TYPE_TEXT_VARIATION_PHONETIC -> false
+            else -> true
+        }
+    }
+
+    private fun autocorrect(separator: String): Boolean {
+        if (!autocorrectAllowed()) return false
         val ic = currentInputConnection ?: return false
-        if (currentWord.isEmpty()) return false
-
-        val typed = currentWord.toString()
-        val eval = suggester.evaluate(typed, previousCommittedWord)
-        val replacement = eval.primaryCorrection
-
-        if (Storage.autoCorrect && eval.shouldAutoCommit && replacement != null && replacement != typed) {
-            ic.deleteSurroundingText(typed.length, 0)
-            ic.commitText(replacement, 1)
-            lastOriginalTyped = typed
-            lastAutoCorrectedTo = replacement
-            previousCommittedWord = replacement
-        } else {
-            lastOriginalTyped = null
-            lastAutoCorrectedTo = null
-            previousCommittedWord = typed
-        }
-        currentWord.clear()
+        if (!ic.getSelectedText(0).isNullOrEmpty()) return false
+        val word = currentWord()
+        if (word.isEmpty()) return false
+        val fixed = suggester.correction(word) ?: return false
+        if (fixed == word) return false
+        ic.beginBatchEdit()
+        ic.deleteSurroundingText(word.length, 0)
+        ic.commitText(fixed + separator, 1)
+        ic.endBatchEdit()
+        lastCorrection = Triple(word, fixed, separator)
         return true
     }
 
-    override fun onSpace() {
-        val ic = currentInputConnection ?: return
-        val now = System.currentTimeMillis()
+    private fun learnCurrentWord() {
+        if (isPrivateField(currentInputEditorInfo)) return
+        val w = currentWord()
+        if (w.length >= 2 && w.any { it.isLetter() }) suggester.learn(w)
+    }
 
-        if (Storage.doubleSpacePeriod && currentWord.isEmpty() && (now - lastSpaceTime) < 340L) {
+    override fun onText(text: String) {
+        val ic = currentInputConnection ?: return
+        if (text == " ") {
             val before = ic.getTextBeforeCursor(2, 0)?.toString() ?: ""
             if (before.length == 2 && before[1] == ' ' && before[0].isLetterOrDigit()) {
+                ic.beginBatchEdit()
                 ic.deleteSurroundingText(1, 0)
                 ic.commitText(". ", 1)
-                lastSpaceTime = 0L
-                updateAutoCapitalization()
-                refreshSuggestions()
+                ic.endBatchEdit()
+                refresh()
                 return
             }
         }
-
-        commitPendingWordWithAutocorrectIfApplicable()
-        ic.commitText(" ", 1)
-        lastSpaceTime = now
-        updateAutoCapitalization()
-        refreshSuggestions()
-    }
-
-    override fun onBackspace() {
-        val ic = currentInputConnection ?: return
-
-        val orig = lastOriginalTyped
-        val corrected = lastAutoCorrectedTo
-        if (currentWord.isEmpty() && orig != null && corrected != null) {
-            val tail = ic.getTextBeforeCursor(corrected.length + 1, 0)?.toString() ?: ""
-            if (tail == "$corrected ") {
-                ic.deleteSurroundingText(corrected.length + 1, 0)
-                ic.commitText(orig, 1)
-                currentWord.clear()
-                currentWord.append(orig)
-                Storage.recordUserWord(this, orig)
-                suggester.reloadUserWords()
-                lastOriginalTyped = null
-                lastAutoCorrectedTo = null
-                refreshSuggestions()
+        if (text.length == 1 && text[0] in SEPARATORS) {
+            if (autocorrect(text)) {
+                refresh()
                 return
             }
-            lastOriginalTyped = null
-            lastAutoCorrectedTo = null
+            learnCurrentWord()
         }
+        lastCorrection = null
+        ic.commitText(text, 1)
+        refresh()
+    }
 
-        if (currentWord.isNotEmpty()) {
-            currentWord.deleteCharAt(currentWord.length - 1)
-            ic.deleteSurroundingText(1, 0)
-        } else {
-            ic.deleteSurroundingText(1, 0)
-            val before = ic.getTextBeforeCursor(20, 0)?.toString() ?: ""
-            val trailingWord = before.takeLastWhile { it.isLetter() || it == '\'' }
-            currentWord.clear()
-            if (trailingWord.isNotEmpty()) {
-                currentWord.append(trailingWord)
+    override fun onDelete() {
+        val ic = currentInputConnection ?: return
+        val undo = lastCorrection
+        lastCorrection = null
+        if (undo != null) {
+            val (original, fixed, sep) = undo
+            val expected = fixed + sep
+            if (ic.getTextBeforeCursor(expected.length, 0)?.toString() == expected) {
+                ic.beginBatchEdit()
+                ic.deleteSurroundingText(expected.length, 0)
+                ic.commitText(original, 1)
+                ic.endBatchEdit()
+                suggester.learn(original, strong = true)
+                refresh()
+                return
             }
         }
-        updateAutoCapitalization()
-        refreshSuggestions()
-    }
-
-    override fun onDeleteWord() {
-        val ic = currentInputConnection ?: return
-        lastOriginalTyped = null
-        lastAutoCorrectedTo = null
-
-        if (currentWord.isNotEmpty()) {
-            val len = currentWord.length
-            currentWord.clear()
-            ic.deleteSurroundingText(len, 0)
+        if (!ic.getSelectedText(0).isNullOrEmpty()) {
+            ic.commitText("", 1)
         } else {
-            val before = ic.getTextBeforeCursor(32, 0)?.toString() ?: ""
-            val trimmed = before.trimEnd()
-            val lastSpace = trimmed.lastIndexOf(' ')
-            val count = if (lastSpace == -1) before.length else (before.length - lastSpace - 1)
-            if (count > 0) ic.deleteSurroundingText(count, 0)
+            sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL)
         }
-        updateAutoCapitalization()
-        refreshSuggestions()
-    }
-
-    override fun onSuggestionClicked(word: String, index: Int) {
-        val ic = currentInputConnection ?: return
-        lastOriginalTyped = null
-        lastAutoCorrectedTo = null
-
-        if (currentWord.isNotEmpty()) {
-            ic.deleteSurroundingText(currentWord.length, 0)
-            currentWord.clear()
-        }
-        ic.commitText("$word ", 1)
-        previousCommittedWord = word
-
-        Storage.recordUserWord(this, word)
-        suggester.reloadUserWords()
-
-        updateAutoCapitalization()
-        refreshSuggestions()
+        refresh()
     }
 
     override fun onEnter() {
         val ic = currentInputConnection ?: return
-        commitPendingWordWithAutocorrectIfApplicable()
-
         val info = currentInputEditorInfo
-        val action = info?.imeOptions?.and(EditorInfo.IME_MASK_ACTION) ?: EditorInfo.IME_ACTION_NONE
-        val isMultiLine = (info?.inputType?.and(InputType.TYPE_TEXT_FLAG_MULTI_LINE) ?: 0) != 0
-
-        if (!isMultiLine && action != EditorInfo.IME_ACTION_NONE && action != EditorInfo.IME_ACTION_UNSPECIFIED) {
-            ic.performEditorAction(action)
+        if (!autocorrect("")) learnCurrentWord()
+        lastCorrection = null
+        val action = (info?.imeOptions ?: 0) and EditorInfo.IME_MASK_ACTION
+        val noEnterAction = info != null && info.imeOptions and EditorInfo.IME_FLAG_NO_ENTER_ACTION != 0
+        if (info == null || noEnterAction || action == EditorInfo.IME_ACTION_NONE || action == EditorInfo.IME_ACTION_UNSPECIFIED) {
+            sendKeyChar('\n')
         } else {
-            ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
-            ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
+            ic.performEditorAction(action)
         }
-        updateAutoCapitalization()
-        refreshSuggestions()
+        refresh()
     }
 
-    override fun onCursorMove(delta: Int) {
+    override fun onSuggestion(word: String) {
         val ic = currentInputConnection ?: return
-        val keyCode = if (delta > 0) KeyEvent.KEYCODE_DPAD_RIGHT else KeyEvent.KEYCODE_DPAD_LEFT
-        repeat(kotlin.math.abs(delta)) {
-            ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
-            ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
+        val typed = currentWord()
+        ic.beginBatchEdit()
+        ic.deleteSurroundingText(typed.length, 0)
+        ic.commitText("$word ", 1)
+        ic.endBatchEdit()
+        lastCorrection = null
+        if (!isPrivateField(currentInputEditorInfo)) suggester.learn(word, strong = word == typed)
+        refresh()
+    }
+
+    override fun onToolbar(action: KeyboardView.ToolbarAction) {
+        when (action) {
+            KeyboardView.ToolbarAction.CLIPBOARD -> showClipboard(true)
+            KeyboardView.ToolbarAction.EMOJI -> showEmoji(true)
+            KeyboardView.ToolbarAction.SETTINGS -> openSettings(false)
+            KeyboardView.ToolbarAction.MIC -> startVoice()
+            KeyboardView.ToolbarAction.HIDE -> requestHideSelf(0)
         }
     }
 
-    override fun onOpenSettings() {
-        try {
-            val intent = Intent(this, SettingsActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    override fun onCursorMove(steps: Int) {
+        lastCorrection = null
+        val code = if (steps < 0) KeyEvent.KEYCODE_DPAD_LEFT else KeyEvent.KEYCODE_DPAD_RIGHT
+        repeat(abs(steps)) { sendDownUpKeyEvents(code) }
+    }
+
+    private fun openSettings(requestMic: Boolean) {
+        startActivity(
+            Intent(this, SettingsActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                .putExtra(SettingsActivity.EXTRA_REQUEST_MIC, requestMic)
+        )
+    }
+
+    // ------------------------------------------------------------ clipboard panel
+
+    private fun showClipboard(show: Boolean) {
+        if (!::clipboard.isInitialized) return
+        if (show) {
+            emoji.visibility = View.GONE
+            voice.visibility = View.GONE
+            clipboard.fixedHeight = keyboard.height
+            clipboard.bottomInset = keyboard.navInset
+            clipboard.setPalette(keyboard.palette())
+            clipboard.syncFromSystemClipboard()
+            clipboard.visibility = View.VISIBLE
+            keyboard.visibility = View.INVISIBLE
+        } else {
+            clipboard.visibility = View.GONE
+            keyboard.visibility = View.VISIBLE
+        }
+    }
+
+    override fun onClipCommit(text: String) {
+        lastCorrection = null
+        currentInputConnection?.commitText(text, 1)
+        showClipboard(false)
+        refresh()
+    }
+
+    override fun onClipClose() {
+        showClipboard(false)
+        refresh()
+    }
+
+    // ------------------------------------------------------------ emoji panel
+
+    private fun showEmoji(show: Boolean) {
+        if (!::emoji.isInitialized) return
+        if (show) {
+            clipboard.visibility = View.GONE
+            voice.visibility = View.GONE
+            emoji.fixedHeight = keyboard.height
+            emoji.bottomInset = keyboard.navInset
+            emoji.onOpen()
+            emoji.visibility = View.VISIBLE
+            keyboard.visibility = View.INVISIBLE
+        } else {
+            emoji.visibility = View.GONE
+            keyboard.visibility = View.VISIBLE
+        }
+    }
+
+    override fun onEmoji(emoji: String) {
+        lastCorrection = null
+        currentInputConnection?.commitText(emoji, 1)
+    }
+
+    override fun onEmojiDelete() = onDelete()
+
+    override fun onEmojiSpace() {
+        currentInputConnection?.commitText(" ", 1)
+    }
+
+    override fun onEmojiAbc() {
+        showEmoji(false)
+        refresh()
+    }
+
+    // ------------------------------------------------------------ voice typing (with instant hardware cutoff on pause)
+
+    private fun showVoice(show: Boolean) {
+        if (!::voice.isInitialized) return
+        if (show) {
+            emoji.visibility = View.GONE
+            clipboard.visibility = View.GONE
+            voice.fixedHeight = keyboard.height
+            voice.bottomInset = keyboard.navInset
+            voice.visibility = View.VISIBLE
+            keyboard.visibility = View.INVISIBLE
+        } else {
+            voice.visibility = View.GONE
+            keyboard.visibility = View.VISIBLE
+        }
+    }
+
+    private fun recognitionAvailable(): Boolean =
+        SpeechRecognizer.isRecognitionAvailable(this) ||
+            (Build.VERSION.SDK_INT >= 33 && SpeechRecognizer.isOnDeviceRecognitionAvailable(this))
+
+    private fun recognizerIntent() = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+        putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
+        putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
+    }
+
+    private fun createFreshRecognizer(): SpeechRecognizer {
+        runCatching {
+            recognizer?.cancel()
+            recognizer?.destroy()
+        }
+        recognizer = null
+
+        val r = if (Build.VERSION.SDK_INT >= 33 && SpeechRecognizer.isOnDeviceRecognitionAvailable(this)) {
+            SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
+        } else {
+            SpeechRecognizer.createSpeechRecognizer(this)
+        }
+        r.setRecognitionListener(object : RecognitionListener {
+            override fun onReadyForSpeech(params: Bundle?) {
+                if (!listening) return
+                voice.setListening(true, "Listening…")
             }
-            startActivity(intent)
-        } catch (_: Exception) {
-        }
+
+            override fun onBeginningOfSpeech() {
+                if (!listening) return
+                val before = currentInputConnection?.getTextBeforeCursor(1, 0)?.toString() ?: ""
+                needsLeadingSpace = before.isNotEmpty() && !before[0].isWhitespace()
+            }
+
+            override fun onRmsChanged(rmsdB: Float) {
+                if (!listening) return
+                voice.setLevel((rmsdB + 2f) / 12f)
+            }
+
+            override fun onBufferReceived(buffer: ByteArray?) = Unit
+            override fun onEndOfSpeech() = Unit
+            override fun onEvent(eventType: Int, params: Bundle?) = Unit
+
+            override fun onPartialResults(partialResults: Bundle?) {
+                if (!listening) return
+                val text = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
+                if (!text.isNullOrEmpty()) currentInputConnection?.setComposingText(withSpace(text), 1)
+            }
+
+            override fun onResults(results: Bundle?) {
+                if (!listening) return
+                val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
+                val ic = currentInputConnection
+                if (ic != null) {
+                    if (!text.isNullOrEmpty()) ic.commitText(withSpace(text), 1) else ic.finishComposingText()
+                }
+                needsLeadingSpace = true
+                if (listening) restartListening()
+            }
+
+            override fun onError(error: Int) {
+                if (!listening) return
+                when (error) {
+                    SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> if (listening) restartListening()
+                    SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> handler.postDelayed({ if (listening) restartListening() }, 300)
+                    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> {
+                        stopVoiceImmediate(hide = true)
+                        openSettings(true)
+                    }
+                    else -> {
+                        stopVoiceImmediate(hide = false)
+                        voice.setListening(false, "Paused — tap mic to resume")
+                    }
+                }
+            }
+        })
+        recognizer = r
+        return r
     }
 
-    override fun onVoiceStart() {
-        commitPendingWordWithAutocorrectIfApplicable()
-        keyboardView?.visibility = View.GONE
-        voicePanelView?.apply {
-            theme = Themes.byId(Storage.themeId)
-            visibility = View.VISIBLE
-            resumeListeningExplicit()
-        }
+    private fun withSpace(text: String) = if (needsLeadingSpace) " $text" else text
+
+    private fun restartListening() {
+        if (!listening) return
+        handler.post { if (listening) recognizer?.startListening(recognizerIntent()) }
     }
 
-    // VoicePanelView.Listener callbacks
-    override fun onVoiceCommit(text: String) {
+    private fun startVoice() {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            openSettings(true)
+            return
+        }
+        if (!recognitionAvailable()) {
+            Toast.makeText(this, "No speech recognition service is installed", Toast.LENGTH_LONG).show()
+            return
+        }
+        showVoice(true)
+        listening = true
+        val before = currentInputConnection?.getTextBeforeCursor(1, 0)?.toString() ?: ""
+        needsLeadingSpace = before.isNotEmpty() && !before[0].isWhitespace()
+        voice.setListening(true, "Listening…")
+        createFreshRecognizer().startListening(recognizerIntent())
+    }
+
+    /**
+     * Immediately kills and destroys the SpeechRecognizer hardware stream when Pause is tapped
+     * so Android shuts down the mic on the spot and ignores any buffered audio.
+     */
+    private fun stopVoiceImmediate(hide: Boolean) {
+        listening = false
+        handler.removeCallbacksAndMessages(null)
+        runCatching { recognizer?.stopListening() }
+        runCatching { recognizer?.cancel() }
+        runCatching { recognizer?.destroy() }
+        recognizer = null
+        runCatching { currentInputConnection?.finishComposingText() }
+
+        if (::voice.isInitialized) {
+            voice.setListening(false, "Paused — tap mic to resume")
+            if (hide) showVoice(false)
+        }
+        if (::keyboard.isInitialized && hide) refresh()
+    }
+
+    companion object {
+        private const val SEPARATORS = " .,!?;:"
+    }
+
+    override fun onVoiceKeyboard() = stopVoiceImmediate(hide = true)
+
+    override fun onVoiceToggle() {
+        if (listening) stopVoiceImmediate(hide = false) else startVoice()
+    }
+
+    override fun onVoiceDeleteWord() {
         val ic = currentInputConnection ?: return
         ic.finishComposingText()
-        ic.commitText(text, 1)
-    }
-
-    override fun onVoicePartial(text: String) {
-        val ic = currentInputConnection ?: return
-        if (text.isEmpty()) {
-            ic.finishComposingText()
-        } else {
-            ic.setComposingText(text, 1)
-        }
-    }
-
-    override fun onVoiceClose() {
-        currentInputConnection?.finishComposingText()
-        voicePanelView?.pauseListeningImmediate()
-        voicePanelView?.visibility = View.GONE
-        keyboardView?.visibility = View.VISIBLE
-        updateAutoCapitalization()
-        refreshSuggestions()
-    }
-
-    override fun onVoiceBackspace() {
-        currentInputConnection?.finishComposingText()
-        onBackspace()
+        val before = ic.getTextBeforeCursor(64, 0)?.toString() ?: return
+        val trailing = before.takeLastWhile { it.isWhitespace() }
+        val word = before.dropLast(trailing.length).takeLastWhile { !it.isWhitespace() }
+        val n = trailing.length + word.length
+        if (n > 0) ic.deleteSurroundingText(n, 0)
     }
 }
