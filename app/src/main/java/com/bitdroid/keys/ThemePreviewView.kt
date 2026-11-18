@@ -12,7 +12,7 @@ class ThemePreviewView(context: Context) : View(context) {
 
     var palette: Palette? = null
         set(value) { field = value; invalidate() }
-    var shape: String = "round"
+    var shape: String = "square"
         set(value) { field = value; invalidate() }
     var chosen: Boolean = false
         set(value) { field = value; invalidate() }

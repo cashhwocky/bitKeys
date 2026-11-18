@@ -199,23 +199,30 @@ class SettingsActivity : Activity() {
 
         // Accent swatches
         column.addView(section("ACCENT", accent))
-        val swatches = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        Themes.ACCENTS.forEach { (id, name) ->
-            val color = Themes.accentColor(this, id)
-            val isSel = prefs.accent == id
-            val dot = View(this).apply {
-                background = GradientDrawable().apply {
-                    shape = GradientDrawable.OVAL
-                    setColor(color)
-                    if (isSel) setStroke(dpi(3f), TEXT)
-                }
-                contentDescription = "$name accent" + if (isSel) ", selected" else ""
-                isClickable = true
-                setOnClickListener { update(prefs.copy(accent = id)) }
+        val swatchesWrap = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        Themes.ACCENTS.chunked(4).forEachIndexed { rIdx, group ->
+            val swatches = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                if (rIdx > 0) setPadding(0, dpi(12f), 0, 0)
             }
-            swatches.addView(dot, LinearLayout.LayoutParams(dpi(44f), dpi(44f)).apply { marginEnd = dpi(14f) })
+            group.forEach { (id, name) ->
+                val color = Themes.accentColor(this, id)
+                val isSel = prefs.accent == id
+                val dot = View(this).apply {
+                    background = GradientDrawable().apply {
+                        shape = GradientDrawable.OVAL
+                        setColor(color)
+                        if (isSel) setStroke(dpi(3f), TEXT)
+                    }
+                    contentDescription = "$name accent" + if (isSel) ", selected" else ""
+                    isClickable = true
+                    setOnClickListener { update(prefs.copy(accent = id)) }
+                }
+                swatches.addView(dot, LinearLayout.LayoutParams(dpi(44f), dpi(44f)).apply { marginEnd = dpi(14f) })
+            }
+            swatchesWrap.addView(swatches)
         }
-        column.addView(swatches)
+        column.addView(swatchesWrap)
         column.addView(text("“Wallpaper” follows your Material You colors.", 13f, SUB).also { it.setPadding(0, dpi(8f), 0, 0) })
 
         // Key shape segmented control

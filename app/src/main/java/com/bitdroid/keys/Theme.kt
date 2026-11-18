@@ -6,7 +6,7 @@ import android.content.Context
 data class KeyboardPrefs(
     val theme: String = "tonal",
     val accent: String = "mint",
-    val shape: String = "round",
+    val shape: String = "square",
     val borders: Boolean = false,
     val numberRow: Boolean = false,
     val haptics: Boolean = true,
@@ -19,7 +19,7 @@ data class KeyboardPrefs(
         Storage.prefs(context, NAME).edit()
             .putString("theme_v2", theme)
             .putString("accent_v4", accent)
-            .putString("shape_v2", shape)
+            .putString("shape_v3", shape)
             .putBoolean("borders", borders)
             .putBoolean("number_row", numberRow)
             .putBoolean("haptics", haptics)
@@ -39,7 +39,7 @@ data class KeyboardPrefs(
             return KeyboardPrefs(
                 theme = sp.getString("theme_v2", d.theme) ?: d.theme,
                 accent = sp.getString("accent_v4", d.accent) ?: d.accent,
-                shape = sp.getString("shape_v2", d.shape) ?: d.shape,
+                shape = sp.getString("shape_v3", "square") ?: "square",
                 borders = sp.getBoolean("borders", d.borders),
                 numberRow = sp.getBoolean("number_row", d.numberRow),
                 haptics = sp.getBoolean("haptics", d.haptics),
@@ -82,14 +82,22 @@ object Themes {
         "graphite" to "Graphite",
         "light" to "Light",
         "gboard" to "Gboard Dark",
+        "ocean" to "Midnight Ocean",
+        "emerald" to "Emerald Forest",
+        "crimson" to "Crimson Velvet",
+        "cyber" to "Cyber Neon",
+        "rosequartz" to "Rose Quartz",
     )
 
-    /** "lilac" means each theme's own native lilac. */
+    /** "lilac" means each theme's own native accent. */
     val ACCENTS = listOf(
         "mint" to "Mint",
         "lilac" to "Lilac",
         "blue" to "Blue",
         "coral" to "Coral",
+        "rose" to "Rose",
+        "gold" to "Gold",
+        "cyan" to "Cyan",
         "dynamic" to "Wallpaper",
     )
 
@@ -107,6 +115,9 @@ object Themes {
         "blue" -> c(0xFFA8C7FA)
         "coral" -> c(0xFFFFB4A8)
         "mint" -> c(0xFF7FE0C4)
+        "rose" -> c(0xFFFFB1C8)
+        "gold" -> c(0xFFF5C96B)
+        "cyan" -> c(0xFF6EE7F9)
         "dynamic" -> context.getColor(android.R.color.system_accent1_200)
         else -> c(0xFFB9A7F0) // lilac
     }
@@ -170,6 +181,41 @@ object Themes {
                 accent = c(0xFFA8C7FA), onAccent = c(0xFF062E6F), strip = c(0xFF1A1B1E),
                 tool = c(0xFF282A2F), onTool = c(0xFFE3E3E3), micBg = c(0xFFA8C7FA), micFg = c(0xFF062E6F),
                 wave = c(0xFFA8C7FA), isLight = false,
+            )
+            "ocean" -> Palette(
+                bg = c(0xFF0D1520), key = c(0xFF182638), mod = c(0xFF233852), onMod = c(0xFFD7ECFF),
+                text = c(0xFFEAF4FF), sub = c(0xFF8AA8C7), pressed = c(0xFF2E496B), border = c(0xFF2B425E),
+                accent = c(0xFF6EE7F9), onAccent = c(0xFF052630), strip = c(0xFF131F2F),
+                tool = c(0xFF1E324A), onTool = c(0xFFBDE6FF), micBg = c(0xFF6EE7F9), micFg = c(0xFF052630),
+                wave = c(0xFF6EE7F9), isLight = false,
+            )
+            "emerald" -> Palette(
+                bg = c(0xFF0E1B16), key = c(0xFF193026), mod = c(0xFF244738), onMod = c(0xFFD6F7E7),
+                text = c(0xFFE8FBF0), sub = c(0xFF8AB8A2), pressed = c(0xFF315E4B), border = c(0xFF2B5241),
+                accent = c(0xFF7FE0C4), onAccent = c(0xFF08291E), strip = c(0xFF13241D),
+                tool = c(0xFF1F3D31), onTool = c(0xFFBDF5E1), micBg = c(0xFF7FE0C4), micFg = c(0xFF08291E),
+                wave = c(0xFF7FE0C4), isLight = false,
+            )
+            "crimson" -> Palette(
+                bg = c(0xFF1E1014), key = c(0xFF361C24), mod = c(0xFF522936), onMod = c(0xFFFFD9E2),
+                text = c(0xFFFFECF0), sub = c(0xFFC997A4), pressed = c(0xFF693545), border = c(0xFF592D3B),
+                accent = c(0xFFFFB1C8), onAccent = c(0xFF3B0918), strip = c(0xFF29161C),
+                tool = c(0xFF47232E), onTool = c(0xFFFFD1DF), micBg = c(0xFFFFB1C8), micFg = c(0xFF3B0918),
+                wave = c(0xFFFFB1C8), isLight = false,
+            )
+            "cyber" -> Palette(
+                bg = c(0xFF0B0A14), key = c(0xFF1A1630), mod = c(0xFF2B224D), onMod = c(0xFF6EE7F9),
+                text = c(0xFFF3EEFF), sub = c(0xFFA594D9), pressed = c(0xFF3B2E6B), border = c(0xFF382C66),
+                accent = c(0xFFFF6AC1), onAccent = c(0xFF1F0415), strip = c(0xFF131024),
+                tool = c(0xFF261E45), onTool = c(0xFF6EE7F9), micBg = c(0xFFFF6AC1), micFg = c(0xFF1F0415),
+                wave = c(0xFF6EE7F9), isLight = false,
+            )
+            "rosequartz" -> Palette(
+                bg = c(0xFFF7E6EC), key = c(0xFFFFF9FB), mod = c(0xFFEBC5D3), onMod = c(0xFF3D1E29),
+                text = c(0xFF3D1E29), sub = c(0xFF875C6B), pressed = c(0xFFF0D0DC), border = c(0xFFDFB6C5),
+                accent = c(0xFFA83860), onAccent = WHITE, strip = c(c(0xFFFFF2F6)),
+                tool = c(0xFFA83860), onTool = c(0xFFFFE8F0), micBg = c(0xFFA83860), micFg = WHITE,
+                wave = c(0xFFD46A8E), isLight = true,
             )
             else -> Palette( // Tonal (default) — plum keys, lavender modifiers
                 bg = c(0xFF261F30), key = c(0xFF3D3550), mod = c(0xFFD2C4F0), onMod = c(0xFF2C2442),

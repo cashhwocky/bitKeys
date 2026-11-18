@@ -53,7 +53,7 @@ class EmojiPanelView(context: Context) : View(context) {
     var bottomInset = 0
 
     private var palette = Themes.palette(context, KeyboardPrefs.load(context))
-    private var shape = "round"
+    private var shape = "square"
 
     private val store = Storage.prefs(context, KeyboardPrefs.NAME)
     private val recents = ArrayList<String>()
