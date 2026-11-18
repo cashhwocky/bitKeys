@@ -6,7 +6,7 @@ import android.content.SharedPreferences
 object Storage {
     private const val PREFS_NAME = "bitkeys_prefs"
 
-    private fun prefs(ctx: Context): SharedPreferences =
+    fun prefs(ctx: Context): SharedPreferences =
         ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     var themeId: String = "amoled_gboard"

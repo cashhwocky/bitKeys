@@ -18,6 +18,25 @@ data class KeyboardTheme(
     val dividerColor: Int,
     val popupBg: Int,
     val cornerRadiusDp: Float = 8f
+) {
+    // Compatibility properties for legacy views
+    val bg: Int get() = boardBg
+    val key: Int get() = keyBg
+    val keyAlt: Int get() = funcKeyBg
+    val keyPress: Int get() = keyPressedBg
+    val accent: Int get() = accentBg
+    val onAccent: Int get() = accentText
+    val text: Int get() = keyText
+    val textMuted: Int get() = subText
+    val border: Int get() = dividerColor
+}
+
+typealias Palette = KeyboardTheme
+
+data class KeyboardPrefs(
+    val themeId: String = Storage.themeId,
+    val keyRadiusDp: Float = Themes.byId(Storage.themeId).cornerRadiusDp,
+    val keyBorders: Boolean = Storage.keyBorders
 )
 
 object Themes {
@@ -97,4 +116,6 @@ object Themes {
 
     fun byId(id: String): KeyboardTheme =
         ALL.firstOrNull { it.id == id } ?: AMOLED_GBOARD
+
+    fun palette(id: String = Storage.themeId): KeyboardTheme = byId(id)
 }
