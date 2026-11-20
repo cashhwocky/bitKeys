@@ -111,6 +111,7 @@ class KeyboardView(context: Context) : View(context) {
     private val upAt = HashMap<Key, Long>()
     private var bubbleKey: Key? = null
     private var bubbleAt = 0L
+    private var bubbleUpAt = 0L // when the bubble's key was released (0 = still held)
     private val animPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val bubbleRect = RectF()
@@ -119,12 +120,14 @@ class KeyboardView(context: Context) : View(context) {
         val now = SystemClock.uptimeMillis()
         downAt[k] = now
         upAt.remove(k)
-        if (k.kind == Kind.CHAR) { bubbleKey = k; bubbleAt = now }
+        if (k.kind == Kind.CHAR) { bubbleKey = k; bubbleAt = now; bubbleUpAt = 0L }
         invalidate()
     }
 
     private fun markUp(k: Key) {
-        if (downAt.containsKey(k)) upAt[k] = SystemClock.uptimeMillis()
+        val now = SystemClock.uptimeMillis()
+        if (downAt.containsKey(k)) upAt[k] = now
+        if (k === bubbleKey && bubbleUpAt == 0L) bubbleUpAt = now
         invalidate()
     }
 
@@ -433,8 +436,9 @@ class KeyboardView(context: Context) : View(context) {
         val now = SystemClock.uptimeMillis()
         val k = bubbleKey ?: return
         val dt = now - bubbleAt
-        val held = k in pressedKeys
-        if (!held && dt > 260) { bubbleKey = null; return }
+        val held = k in pressedKeys && bubbleUpAt == 0L
+        // Fade once after release, then the bubble is gone for good (no second pop).
+        if (!held && bubbleUpAt != 0L && now - bubbleUpAt > 90) { bubbleKey = null; return }
 
         // ring
         val rr = (dt / 300f).coerceIn(0f, 1f)
@@ -451,7 +455,7 @@ class KeyboardView(context: Context) : View(context) {
         val label = if (mode == Mode.LETTERS && shift != Shift.OFF) k.label.uppercase() else k.label
         val inS = (dt / 60f).coerceIn(0f, 1f)
         val eased = 1f - (1f - inS) * (1f - inS) * (1f - inS)
-        val alpha = if (held) 1f else (1f - ((now - (upAt[k] ?: now)) / 90f)).coerceIn(0f, 1f)
+        val alpha = if (bubbleUpAt == 0L) 1f else (1f - ((now - bubbleUpAt) / 90f)).coerceIn(0f, 1f)
         if (alpha <= 0f) return
         val w = k.rect.width() * 1.35f
         val h = dp(58f)
