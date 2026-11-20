@@ -15,6 +15,7 @@ import android.util.TypedValue
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
+import android.view.RoundedCorner
 import android.view.WindowInsets
 import kotlin.math.abs
 import kotlin.math.min
@@ -101,9 +102,13 @@ class KeyboardView(context: Context) : View(context) {
 
     /** iOS-style Glass theme: floating panel, flat keys, 123|space|action row, emoji + mic bar. */
     private val glass get() = prefs.theme == "glass"
-    private val glassBarH = dp(48f)
+    private val glassBarH = dp(42f)
     private val hPad get() = if (glass) dp(9f) else sidePad
     private var barTop = 0f
+    /** The phone's own bottom screen-corner radius (px), so the glass panel can follow it. */
+    private var screenCorner = 0
+    private val panelSide get() = dp(5f)
+    private val panelBottomRadius get() = maxOf(dp(30f), screenCorner - panelSide)
     var navInset = 0
         private set
 
@@ -126,6 +131,12 @@ class KeyboardView(context: Context) : View(context) {
             if (bottom != navInset) {
                 navInset = bottom
                 requestLayout()
+            }
+            val corner = insets.getRoundedCorner(RoundedCorner.POSITION_BOTTOM_LEFT)?.radius ?: 0
+            if (corner != screenCorner) {
+                screenCorner = corner
+                layoutStrip()
+                invalidate()
             }
             insets
         }
@@ -187,10 +198,12 @@ class KeyboardView(context: Context) : View(context) {
 
     private fun bottomRow(modeLabel: String, numpadKey: Boolean = false): List<Key> =
         if (glass) listOfNotNull(
-            Key(Kind.MODE, if (modeLabel == "?123") "123" else modeLabel, if (numpadKey) 1.5f else 2.45f, mod = true),
-            if (numpadKey) Key(Kind.NUMPAD, "1234", 1.3f, mod = true) else null,
-            Key(Kind.SPACE, "", if (numpadKey) 4.75f else 5.1f),
-            Key(Kind.ENTER, "", 2.45f),
+            Key(Kind.MODE, if (modeLabel == "?123") "123" else modeLabel, if (numpadKey) 1.4f else 1.75f, mod = true),
+            if (numpadKey) Key(Kind.NUMPAD, "1234", 1.4f, mod = true) else null,
+            Key(Kind.CHAR, ",", 1f, mod = true),
+            Key(Kind.SPACE, "", if (numpadKey) 3.4f else 4.5f),
+            Key(Kind.CHAR, ".", 1f, mod = true),
+            Key(Kind.ENTER, "", 1.75f),
         ) else classicBottomRow(modeLabel, numpadKey)
 
     private fun classicBottomRow(modeLabel: String, numpadKey: Boolean = false): List<Key> = listOfNotNull(
@@ -242,7 +255,7 @@ class KeyboardView(context: Context) : View(context) {
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val w = MeasureSpec.getSize(widthMeasureSpec)
         val h = topPad + stripH + stripGap + rows.size * keyH + (rows.size - 1) * rowGap +
-            (if (glass) glassBarH + dp(10f) else bottomPad) + navInset
+            (if (glass) glassBarH + dp(2f) else bottomPad) + navInset
         setMeasuredDimension(w, h.toInt())
     }
 
@@ -338,13 +351,15 @@ class KeyboardView(context: Context) : View(context) {
         }
         // emoji (where the globe would be) and mic under the keys
         val by = barTop + glassBarH / 2f
-        val ex = hPad + dp(24f)
-        val mx = width - hPad - dp(24f)
+        val inward = maxOf(dp(26f), panelBottomRadius * 0.55f)
+        val ex = hPad + inward
+        val mx = width - hPad - inward
         strip.add(StripTarget(RectF(ex - size / 2, by - size / 2, ex + size / 2, by + size / 2), emoji = true))
         strip.add(StripTarget(RectF(mx - size / 2, by - size / 2, mx + size / 2, by + size / 2), action = ToolbarAction.MIC))
     }
 
     private val glassPanel = RectF()
+    private val panelPath = Path()
     private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(115, 0, 0, 0) }
     private val edgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
 
@@ -359,13 +374,16 @@ class KeyboardView(context: Context) : View(context) {
     override fun onDraw(canvas: Canvas) {
         if (glass) {
             // floating smoked-glass panel with big corners and a faint light edge
-            glassPanel.set(dp(4f), 0f, width - dp(4f), height - dp(4f))
-            val r = dp(40f)
+            glassPanel.set(panelSide, 0f, width - panelSide, height - panelSide)
+            val tr = dp(34f)
+            val br = panelBottomRadius
+            panelPath.reset()
+            panelPath.addRoundRect(glassPanel, floatArrayOf(tr, tr, tr, tr, br, br, br, br), Path.Direction.CW)
             fillPaint.color = palette.bg
-            canvas.drawRoundRect(glassPanel, r, r, fillPaint)
+            canvas.drawPath(panelPath, fillPaint)
             edgePaint.color = Color.argb(34, 255, 255, 255)
             edgePaint.strokeWidth = dp(0.8f)
-            canvas.drawRoundRect(glassPanel, r, r, edgePaint)
+            canvas.drawPath(panelPath, edgePaint)
             drawGlassStrip(canvas)
         } else {
             fillPaint.color = palette.bg
