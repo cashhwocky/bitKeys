@@ -105,6 +105,38 @@ class KeyboardView(context: Context) : View(context) {
     private val glassBarH = dp(42f)
     private val hPad get() = if (glass) dp(9f) else sidePad
     private var barTop = 0f
+
+    // ---- key animations: squish + glow, letter bubble, ring; spinning Enter and flowing space line
+    private val downAt = HashMap<Key, Long>()
+    private val upAt = HashMap<Key, Long>()
+    private var bubbleKey: Key? = null
+    private var bubbleAt = 0L
+    private val animPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    private val bubbleRect = RectF()
+
+    private fun markDown(k: Key) {
+        val now = SystemClock.uptimeMillis()
+        downAt[k] = now
+        upAt.remove(k)
+        if (k.kind == Kind.CHAR) { bubbleKey = k; bubbleAt = now }
+        invalidate()
+    }
+
+    private fun markUp(k: Key) {
+        if (downAt.containsKey(k)) upAt[k] = SystemClock.uptimeMillis()
+        invalidate()
+    }
+
+    /** 0..1 press amount for a key: ramps in fast, springs back out. */
+    private fun pressAmount(k: Key, now: Long): Float {
+        val d = downAt[k] ?: return 0f
+        val inA = ((now - d) / 70f).coerceIn(0f, 1f)
+        val u = upAt[k] ?: return inA
+        val out = 1f - ((now - u) / 150f).coerceIn(0f, 1f)
+        if (out <= 0f) { downAt.remove(k); upAt.remove(k) }
+        return min(inA, out)
+    }
     /** The phone's own bottom screen-corner radius (px), so the glass panel can follow it. */
     private var screenCorner = 0
     private val panelSide get() = dp(5f)
@@ -391,6 +423,57 @@ class KeyboardView(context: Context) : View(context) {
             drawStrip(canvas)
         }
         drawKeys(canvas)
+        drawPressEffects(canvas)
+        // Spinning Enter + flowing space line run continuously; key effects run while active.
+        if (isShown && (!glass || downAt.isNotEmpty() || bubbleKey != null)) postInvalidateOnAnimation()
+    }
+
+    /** Ring that expands around the pressed key, and the letter bubble above it. */
+    private fun drawPressEffects(canvas: Canvas) {
+        val now = SystemClock.uptimeMillis()
+        val k = bubbleKey ?: return
+        val dt = now - bubbleAt
+        val held = k in pressedKeys
+        if (!held && dt > 260) { bubbleKey = null; return }
+
+        // ring
+        val rr = (dt / 300f).coerceIn(0f, 1f)
+        if (rr < 1f) {
+            ringPaint.color = palette.accent
+            ringPaint.alpha = (180 * (1f - rr)).toInt()
+            ringPaint.strokeWidth = dp(2f)
+            val grow = dp(6f) * rr
+            tmp.set(k.rect.left - grow, k.rect.top - grow, k.rect.right + grow, k.rect.bottom + grow)
+            canvas.drawRoundRect(tmp, dp(12f), dp(12f), ringPaint)
+        }
+
+        // letter bubble (stays while held, fades after release)
+        val label = if (mode == Mode.LETTERS && shift != Shift.OFF) k.label.uppercase() else k.label
+        val inS = (dt / 60f).coerceIn(0f, 1f)
+        val eased = 1f - (1f - inS) * (1f - inS) * (1f - inS)
+        val alpha = if (held) 1f else (1f - ((now - (upAt[k] ?: now)) / 90f)).coerceIn(0f, 1f)
+        if (alpha <= 0f) return
+        val w = k.rect.width() * 1.35f
+        val h = dp(58f)
+        val bottom = k.rect.top + dp(6f)
+        val cx = k.rect.centerX().coerceIn(w / 2f + dp(2f), width - w / 2f - dp(2f))
+        val scale = 0.6f + 0.4f * eased
+        bubbleRect.set(cx - w / 2f, bottom - h, cx + w / 2f, bottom)
+        canvas.save()
+        canvas.translate(0f, (1f - eased) * dp(14f))
+        canvas.scale(scale, scale, cx, bottom)
+        animPaint.color = Color.BLACK
+        animPaint.alpha = (70 * alpha).toInt()
+        canvas.drawRoundRect(bubbleRect.left, bubbleRect.top + dp(3f), bubbleRect.right, bubbleRect.bottom + dp(3f), dp(16f), dp(16f), animPaint)
+        animPaint.color = blend(palette.key, palette.text, 0.18f)
+        animPaint.alpha = (255 * alpha).toInt()
+        canvas.drawRoundRect(bubbleRect, dp(16f), dp(16f), animPaint)
+        textPaint.color = palette.text
+        textPaint.alpha = (255 * alpha).toInt()
+        textPaint.textSize = sp(30f)
+        canvas.drawText(label, cx, baseline(bubbleRect, textPaint), textPaint)
+        textPaint.alpha = 255
+        canvas.restore()
     }
 
     private fun drawGlassStrip(canvas: Canvas) {
@@ -514,7 +597,10 @@ class KeyboardView(context: Context) : View(context) {
             if (k.kind == Kind.ENTER) {
                 val radius = min(tmp.height() / 2f + dp(4f), tmp.width() / 2f) * if (pressed) 0.9f else 1f
                 fillPaint.color = palette.accent
+                canvas.save()
+                canvas.rotate((SystemClock.uptimeMillis() % 9000L) / 9000f * 360f, cx, cy)
                 Shapes.drawCookie(canvas, cx, cy, radius, fillPaint)
+                canvas.restore()
                 val icon = when (enterStyle) {
                     EnterStyle.SEARCH -> Icon.SEARCH
                     EnterStyle.DONE -> Icon.DONE
@@ -525,7 +611,12 @@ class KeyboardView(context: Context) : View(context) {
                 continue
             }
 
-            if (pressed && !glass) tmp.inset(dp(1.5f), dp(1.5f))
+            val a = pressAmount(k, SystemClock.uptimeMillis())
+            if (a > 0f) {
+                val sq = 0.09f * a
+                tmp.inset(tmp.width() * sq / 2f, tmp.height() * sq / 2f)
+                tmp.offset(0f, dp(1.5f) * a)
+            }
             val isMod = k.mod || k.kind == Kind.SHIFT || k.kind == Kind.DELETE
             val bg = when {
                 pressed && isMod -> blend(palette.mod, palette.onMod, 0.18f)
@@ -543,6 +634,11 @@ class KeyboardView(context: Context) : View(context) {
             if (glass) canvas.drawRoundRect(tmp.left, tmp.top + dp(1f), tmp.right, tmp.bottom + dp(1f), r, r, shadowPaint)
             fillPaint.color = bg
             canvas.drawRoundRect(tmp, r, r, fillPaint)
+            if (a > 0f) {
+                animPaint.color = Color.WHITE
+                animPaint.alpha = (40 * a).toInt()
+                canvas.drawRoundRect(tmp, r, r, animPaint)
+            }
             if (prefs.borders) {
                 borderPaint.color = palette.border
                 canvas.drawRoundRect(tmp, r, r, borderPaint)
@@ -568,7 +664,8 @@ class KeyboardView(context: Context) : View(context) {
                 }
                 Kind.SPACE -> if (!glass) {
                     val inset = tmp.width() * 0.09f
-                    Shapes.squiggle(wavePath, tmp.left + inset, tmp.right - inset, cy, dp(4f), 4f)
+                    val phase = (SystemClock.uptimeMillis() % 4000L) / 4000f * 2f * Math.PI.toFloat()
+                    Shapes.squiggle(wavePath, tmp.left + inset, tmp.right - inset, tmp.centerY(), dp(4f), 4f, -phase)
                     wavePaint.color = palette.wave
                     wavePaint.strokeWidth = dp(3f)
                     canvas.drawPath(wavePath, wavePaint)
@@ -640,6 +737,7 @@ class KeyboardView(context: Context) : View(context) {
                     if (k != null && k.kind == Kind.CHAR && !other.longFired) {
                         cancelTimers(other)
                         pressedKeys.remove(k)
+                        markUp(k)
                         commitChar(k)
                         other.key = null
                     }
@@ -693,6 +791,7 @@ class KeyboardView(context: Context) : View(context) {
         }
         if (k == null) return
         pressedKeys.add(k)
+        markDown(k)
         when (k.kind) {
             Kind.DELETE -> {
                 listener?.onDelete()
@@ -721,6 +820,7 @@ class KeyboardView(context: Context) : View(context) {
                     val r = Runnable {
                         p.longFired = true
                         pressedKeys.remove(k)
+                        markUp(k)
                         feedback(Kind.CHAR)
                         listener?.onText(alt)
                         invalidate()
@@ -735,7 +835,7 @@ class KeyboardView(context: Context) : View(context) {
 
     private fun release(p: Pointer, commit: Boolean) {
         cancelTimers(p)
-        p.key?.let { pressedKeys.remove(it) }
+        p.key?.let { pressedKeys.remove(it); markUp(it) }
         p.strip?.let { pressedStrip.remove(it) }
         if (!commit) return
 
