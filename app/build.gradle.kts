@@ -17,8 +17,8 @@ android {
         applicationId = "com.bitdroid.keys2"
         minSdk = 31
         targetSdk = 35
-        versionCode = 9
-        versionName = "0.4.2"
+        versionCode = 12
+        versionName = "0.6.0"
     }
 
     signingConfigs {

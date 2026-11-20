@@ -98,6 +98,12 @@ class KeyboardView(context: Context) : View(context) {
     private val topPad = dp(4f)
     private val stripGap = dp(6f)
     private val bottomPad = dp(22f)
+
+    /** iOS-style Glass theme: floating panel, flat keys, 123|space|action row, emoji + mic bar. */
+    private val glass get() = prefs.theme == "glass"
+    private val glassBarH = dp(48f)
+    private val hPad get() = if (glass) dp(9f) else sidePad
+    private var barTop = 0f
     var navInset = 0
         private set
 
@@ -179,7 +185,15 @@ class KeyboardView(context: Context) : View(context) {
     private fun chars(s: String, alts: String? = null): List<Key> =
         s.mapIndexed { i, ch -> Key(Kind.CHAR, ch.toString(), 1f, alts?.getOrNull(i)?.toString()) }
 
-    private fun bottomRow(modeLabel: String, numpadKey: Boolean = false): List<Key> = listOfNotNull(
+    private fun bottomRow(modeLabel: String, numpadKey: Boolean = false): List<Key> =
+        if (glass) listOfNotNull(
+            Key(Kind.MODE, if (modeLabel == "?123") "123" else modeLabel, if (numpadKey) 1.5f else 2.45f, mod = true),
+            if (numpadKey) Key(Kind.NUMPAD, "1234", 1.3f, mod = true) else null,
+            Key(Kind.SPACE, "", if (numpadKey) 4.75f else 5.1f),
+            Key(Kind.ENTER, "", 2.45f),
+        ) else classicBottomRow(modeLabel, numpadKey)
+
+    private fun classicBottomRow(modeLabel: String, numpadKey: Boolean = false): List<Key> = listOfNotNull(
         Key(Kind.MODE, modeLabel, 1.5f, mod = true),
         if (numpadKey) Key(Kind.NUMPAD, "1234", 1.3f, mod = true) else null,
         Key(Kind.CHAR, ",", 1f, mod = true),
@@ -227,7 +241,8 @@ class KeyboardView(context: Context) : View(context) {
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val w = MeasureSpec.getSize(widthMeasureSpec)
-        val h = topPad + stripH + stripGap + rows.size * keyH + (rows.size - 1) * rowGap + bottomPad + navInset
+        val h = topPad + stripH + stripGap + rows.size * keyH + (rows.size - 1) * rowGap +
+            (if (glass) glassBarH + dp(10f) else bottomPad) + navInset
         setMeasuredDimension(w, h.toInt())
     }
 
@@ -241,9 +256,9 @@ class KeyboardView(context: Context) : View(context) {
         var y = topPad + stripH + stripGap
         for (row in rows) {
             val totalWeight = row.sumOf { it.weight.toDouble() }.toFloat()
-            val avail = width - 2 * sidePad - (row.size - 1) * keyGap
+            val avail = width - 2 * hPad - (row.size - 1) * keyGap
             val unit = avail / totalWeight
-            var x = sidePad
+            var x = hPad
             for (k in row) {
                 val w = k.weight * unit
                 k.rect.set(x, y, x + w, y + keyH)
@@ -251,6 +266,7 @@ class KeyboardView(context: Context) : View(context) {
             }
             y += keyH + rowGap
         }
+        barTop = y - rowGap + dp(2f)
     }
 
     private val stripPill = RectF()
@@ -260,6 +276,10 @@ class KeyboardView(context: Context) : View(context) {
     private fun layoutStrip() {
         strip.clear()
         if (width == 0) return
+        if (glass) {
+            layoutGlassStrip()
+            return
+        }
         stripPill.set(sidePad, topPad, width - sidePad, topPad + stripH)
         val cy = stripPill.centerY()
         val mic = dp(42f)
@@ -294,6 +314,40 @@ class KeyboardView(context: Context) : View(context) {
         }
     }
 
+    private fun layoutGlassStrip() {
+        val top = topPad
+        val cy = top + stripH / 2f
+        val size = dp(44f)
+        if (slots.isEmpty()) {
+            // quiet tools: clipboard + settings on the left, hide arrow on the right
+            listOf(ToolbarAction.CLIPBOARD, ToolbarAction.SETTINGS).forEachIndexed { i, a ->
+                val l = hPad + dp(4f) + i * (size + dp(4f))
+                strip.add(StripTarget(RectF(l, cy - size / 2, l + size, cy + size / 2), action = a))
+            }
+            val r = width - hPad - dp(4f)
+            strip.add(StripTarget(RectF(r - size, cy - size / 2, r, cy + size / 2), action = ToolbarAction.HIDE))
+        } else {
+            slotLeft = hPad + dp(4f)
+            slotW = (width - hPad - dp(4f) - slotLeft) / 3f
+            slots.forEachIndexed { i, word ->
+                if (word.isNotEmpty()) {
+                    val l = slotLeft + i * slotW
+                    strip.add(StripTarget(RectF(l, cy - dp(21f), l + slotW, cy + dp(21f)), word = word, slot = i))
+                }
+            }
+        }
+        // emoji (where the globe would be) and mic under the keys
+        val by = barTop + glassBarH / 2f
+        val ex = hPad + dp(24f)
+        val mx = width - hPad - dp(24f)
+        strip.add(StripTarget(RectF(ex - size / 2, by - size / 2, ex + size / 2, by + size / 2), emoji = true))
+        strip.add(StripTarget(RectF(mx - size / 2, by - size / 2, mx + size / 2, by + size / 2), action = ToolbarAction.MIC))
+    }
+
+    private val glassPanel = RectF()
+    private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(115, 0, 0, 0) }
+    private val edgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+
     private val sheetRadius = dp(28f)
     private val wavePath = Path()
     private val wavePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -303,10 +357,54 @@ class KeyboardView(context: Context) : View(context) {
     }
 
     override fun onDraw(canvas: Canvas) {
-        fillPaint.color = palette.bg
-        canvas.drawRoundRect(0f, 0f, width.toFloat(), height + sheetRadius, sheetRadius, sheetRadius, fillPaint)
-        drawStrip(canvas)
+        if (glass) {
+            // floating smoked-glass panel with big corners and a faint light edge
+            glassPanel.set(dp(4f), 0f, width - dp(4f), height - dp(4f))
+            val r = dp(40f)
+            fillPaint.color = palette.bg
+            canvas.drawRoundRect(glassPanel, r, r, fillPaint)
+            edgePaint.color = Color.argb(34, 255, 255, 255)
+            edgePaint.strokeWidth = dp(0.8f)
+            canvas.drawRoundRect(glassPanel, r, r, edgePaint)
+            drawGlassStrip(canvas)
+        } else {
+            fillPaint.color = palette.bg
+            canvas.drawRoundRect(0f, 0f, width.toFloat(), height + sheetRadius, sheetRadius, sheetRadius, fillPaint)
+            drawStrip(canvas)
+        }
         drawKeys(canvas)
+    }
+
+    private fun drawGlassStrip(canvas: Canvas) {
+        if (slots.isNotEmpty() && strip.any { it.word != null }) {
+            fillPaint.color = Color.argb(40, 255, 255, 255)
+            val cy = topPad + stripH / 2f
+            for (i in 1..2) {
+                val x = slotLeft + i * slotW
+                canvas.drawRect(x - dp(0.4f), cy - dp(12f), x + dp(0.4f), cy + dp(12f), fillPaint)
+            }
+        }
+        for (t in strip) {
+            val r = t.rect
+            if (t in pressedStrip) {
+                fillPaint.color = Color.argb(50, 255, 255, 255)
+                canvas.drawRoundRect(r, r.height() / 2, r.height() / 2, fillPaint)
+            }
+            when {
+                t.word != null -> {
+                    textPaint.color = if (t.slot == 0) palette.sub else palette.text
+                    textPaint.textSize = sp(17f)
+                    textPaint.typeface = Typeface.DEFAULT
+                    val shown = if (t.slot == 0) "\u201C${t.word}\u201D" else t.word
+                    canvas.drawText(ellipsize(shown, textPaint, r.width() - dp(8f)), r.centerX(), baseline(r, textPaint), textPaint)
+                }
+                t.emoji -> Icons.draw(canvas, Icon.EMOJI, r.centerX(), r.centerY(), dp(27f), palette.text, weight = 1.6f)
+                t.action == ToolbarAction.MIC -> Icons.draw(canvas, Icon.MIC, r.centerX(), r.centerY(), dp(25f), palette.micFg, weight = 1.7f)
+                t.action == ToolbarAction.HIDE -> Icons.draw(canvas, Icon.CHEVRON_DOWN, r.centerX(), r.centerY(), dp(25f), palette.sub, weight = 2f)
+                t.action == ToolbarAction.CLIPBOARD -> Icons.draw(canvas, Icon.CLIPBOARD, r.centerX(), r.centerY(), dp(21f), palette.sub, weight = 1.8f)
+                else -> Icons.draw(canvas, Icon.SETTINGS, r.centerX(), r.centerY(), dp(21f), palette.sub, weight = 1.8f)
+            }
+        }
     }
 
     private fun drawStrip(canvas: Canvas) {
@@ -380,6 +478,21 @@ class KeyboardView(context: Context) : View(context) {
             val cx = tmp.centerX()
             val cy = tmp.centerY()
 
+            if (k.kind == Kind.ENTER && glass) {
+                val rr = dp(9f)
+                canvas.drawRoundRect(tmp.left, tmp.top + dp(1f), tmp.right, tmp.bottom + dp(1f), rr, rr, shadowPaint)
+                fillPaint.color = if (pressed) blend(palette.accent, Color.WHITE, 0.2f) else palette.accent
+                canvas.drawRoundRect(tmp, rr, rr, fillPaint)
+                val icon = when (enterStyle) {
+                    EnterStyle.SEARCH -> Icon.SEARCH
+                    EnterStyle.DONE -> Icon.DONE
+                    EnterStyle.ENTER -> Icon.NEWLINE
+                    else -> Icon.ARROW
+                }
+                Icons.draw(canvas, icon, cx, cy, dp(22f), palette.onAccent, weight = 2.3f)
+                continue
+            }
+
             if (k.kind == Kind.ENTER) {
                 val radius = min(tmp.height() / 2f + dp(4f), tmp.width() / 2f) * if (pressed) 0.9f else 1f
                 fillPaint.color = palette.accent
@@ -394,7 +507,7 @@ class KeyboardView(context: Context) : View(context) {
                 continue
             }
 
-            if (pressed) tmp.inset(dp(1.5f), dp(1.5f))
+            if (pressed && !glass) tmp.inset(dp(1.5f), dp(1.5f))
             val isMod = k.mod || k.kind == Kind.SHIFT || k.kind == Kind.DELETE
             val bg = when {
                 pressed && isMod -> blend(palette.mod, palette.onMod, 0.18f)
@@ -403,8 +516,13 @@ class KeyboardView(context: Context) : View(context) {
                 else -> palette.key
             }
             val wide = k.kind == Kind.SPACE || k.kind == Kind.MODE || k.kind == Kind.ABC || k.kind == Kind.NUMPAD
-            val r = if (wide && !square) tmp.height() / 2 else min(baseRadius, min(tmp.width(), tmp.height()) / 2)
+            val r = when {
+                glass && (square || prefs.shape == "round") -> dp(9f)
+                wide && !square -> tmp.height() / 2
+                else -> min(baseRadius, min(tmp.width(), tmp.height()) / 2)
+            }
 
+            if (glass) canvas.drawRoundRect(tmp.left, tmp.top + dp(1f), tmp.right, tmp.bottom + dp(1f), r, r, shadowPaint)
             fillPaint.color = bg
             canvas.drawRoundRect(tmp, r, r, fillPaint)
             if (prefs.borders) {
@@ -430,7 +548,7 @@ class KeyboardView(context: Context) : View(context) {
                     labelPaint.textSize = sp(15f)
                     canvas.drawText(k.label, cx, baseline(tmp, labelPaint), labelPaint)
                 }
-                Kind.SPACE -> {
+                Kind.SPACE -> if (!glass) {
                     val inset = tmp.width() * 0.09f
                     Shapes.squiggle(wavePath, tmp.left + inset, tmp.right - inset, cy, dp(4f), 4f)
                     wavePaint.color = palette.wave
@@ -481,8 +599,16 @@ class KeyboardView(context: Context) : View(context) {
     }
 
     private fun findStrip(x: Float, y: Float): StripTarget? {
-        if (y > topPad + stripH + stripGap / 2) return null
-        return strip.firstOrNull { x >= it.rect.left && x <= it.rect.right }
+        val stripBottom = topPad + stripH + stripGap / 2
+        if (y <= stripBottom) {
+            return strip.firstOrNull { it.rect.centerY() < stripBottom && x >= it.rect.left && x <= it.rect.right }
+        }
+        if (glass && y >= barTop - rowGap / 2) {
+            return strip.filter { it.rect.top >= barTop - dp(6f) }
+                .minByOrNull { abs(it.rect.centerX() - x) }
+                ?.takeIf { abs(it.rect.centerX() - x) <= dp(56f) }
+        }
+        return null
     }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {

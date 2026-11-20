@@ -4,8 +4,8 @@ import android.content.Context
 
 /** User-facing keyboard settings, stored in SharedPreferences. */
 data class KeyboardPrefs(
-    val theme: String = "tonal",
-    val accent: String = "mint",
+    val theme: String = "glass",
+    val accent: String = "theme",
     val shape: String = "square",
     val borders: Boolean = false,
     val numberRow: Boolean = false,
@@ -17,8 +17,8 @@ data class KeyboardPrefs(
 ) {
     fun save(context: Context) {
         Storage.prefs(context, NAME).edit()
-            .putString("theme_v2", theme)
-            .putString("accent_v4", accent)
+            .putString("theme_v3", theme)
+            .putString("accent_v5", accent)
             .putString("shape_v3", shape)
             .putBoolean("borders", borders)
             .putBoolean("number_row", numberRow)
@@ -37,8 +37,8 @@ data class KeyboardPrefs(
             val sp = Storage.prefs(context, NAME)
             val d = KeyboardPrefs()
             return KeyboardPrefs(
-                theme = sp.getString("theme_v2", d.theme) ?: d.theme,
-                accent = sp.getString("accent_v4", d.accent) ?: d.accent,
+                theme = sp.getString("theme_v3", d.theme) ?: d.theme,
+                accent = sp.getString("accent_v5", d.accent) ?: d.accent,
                 shape = sp.getString("shape_v3", "square") ?: "square",
                 borders = sp.getBoolean("borders", d.borders),
                 numberRow = sp.getBoolean("number_row", d.numberRow),
@@ -75,6 +75,7 @@ data class Palette(
 
 object Themes {
     val THEMES = listOf(
+        "glass" to "Glass",
         "tonal" to "Tonal",
         "lavender" to "Lavender",
         "dynamic" to "Wallpaper colors",
@@ -91,6 +92,7 @@ object Themes {
 
     /** "lilac" means each theme's own native accent. */
     val ACCENTS = listOf(
+        "theme" to "Theme",
         "mint" to "Mint",
         "lilac" to "Lilac",
         "blue" to "Blue",
@@ -119,6 +121,7 @@ object Themes {
         "gold" -> c(0xFFF5C96B)
         "cyan" -> c(0xFF6EE7F9)
         "dynamic" -> context.getColor(android.R.color.system_accent1_200)
+        "theme" -> c(0xFF0A84FF) // swatch for "theme default" (Glass blue)
         else -> c(0xFFB9A7F0) // lilac
     }
 
@@ -128,6 +131,13 @@ object Themes {
     fun palette(context: Context, themeId: String, accentId: String): Palette {
         fun sys(id: Int) = context.getColor(id)
         val base = when (themeId) {
+            "glass" -> Palette( // Glass (default): smoked panel, flat gray keys, blue action key
+                bg = c(0xFF1E1E20), key = c(0xFF5C5C60), mod = c(0xFF3C3C3F), onMod = WHITE,
+                text = WHITE, sub = c(0xFF9A9AA0), pressed = c(0xFF7C7C81), border = c(0xFF4A4A4E),
+                accent = c(0xFF0A84FF), onAccent = WHITE, strip = c(0xFF1E1E20),
+                tool = c(0xFF3C3C3F), onTool = WHITE, micBg = c(0x00000000), micFg = WHITE,
+                wave = c(0xFF0A84FF), isLight = false,
+            )
             "lavender" -> Palette(
                 bg = c(0xFFE7DDF8), key = c(0xFFFBF8FF), mod = c(0xFFCDBDF2), onMod = c(0xFF2B2342),
                 text = c(0xFF2B2342), sub = c(0xFF6C6283), pressed = c(0xFFD9CCF5), border = c(0xFFC2B5DD),
@@ -225,8 +235,10 @@ object Themes {
                 wave = c(0xFFF2C6EA), isLight = false,
             )
         }
-        if (accentId == "lilac") return base
+        // "theme" keeps each theme's own accent; any other choice recolors the action key, mic and wave.
+        if (accentId == "theme" || (accentId == "lilac" && themeId != "glass")) return base
         val a = accentColor(context, accentId)
+        if (themeId == "glass") return base.copy(accent = a, onAccent = BLACK, wave = a)
         return base.copy(accent = a, onAccent = BLACK, micBg = a, micFg = BLACK, wave = a)
     }
 
