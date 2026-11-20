@@ -81,6 +81,15 @@ jobs:
             echo "new=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # Same version pushed again: refresh the APK on that existing release.
+      - name: Update current release APK
+        if: steps.ver.outputs.new == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          files: out/*-release.apk
+          overwrite_files: true
+
       - name: Auto-release new version
         if: steps.ver.outputs.new == 'true'
         uses: softprops/action-gh-release@v2

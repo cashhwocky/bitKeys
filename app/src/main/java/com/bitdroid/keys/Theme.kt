@@ -4,7 +4,7 @@ import android.content.Context
 
 /** User-facing keyboard settings, stored in SharedPreferences. */
 data class KeyboardPrefs(
-    val theme: String = "dynamic",
+    val theme: String = "tonal",
     val accent: String = "theme",
     val shape: String = "square",
     val borders: Boolean = false,
@@ -17,7 +17,7 @@ data class KeyboardPrefs(
 ) {
     fun save(context: Context) {
         Storage.prefs(context, NAME).edit()
-            .putString("theme_v4", theme)
+            .putString("theme_v5", theme)
             .putString("accent_v5", accent)
             .putString("shape_v3", shape)
             .putBoolean("borders", borders)
@@ -37,7 +37,7 @@ data class KeyboardPrefs(
             val sp = Storage.prefs(context, NAME)
             val d = KeyboardPrefs()
             return KeyboardPrefs(
-                theme = sp.getString("theme_v4", d.theme) ?: d.theme,
+                theme = sp.getString("theme_v5", d.theme) ?: d.theme,
                 accent = sp.getString("accent_v5", d.accent) ?: d.accent,
                 shape = sp.getString("shape_v3", "square") ?: "square",
                 borders = sp.getBoolean("borders", d.borders),
@@ -75,9 +75,9 @@ data class Palette(
 
 object Themes {
     val THEMES = listOf(
+        "tonal" to "Tonal",
         "dynamic" to "Wallpaper colors",
         "glass" to "Glass",
-        "tonal" to "Tonal",
         "lavender" to "Lavender",
         "amoled" to "AMOLED",
         "graphite" to "Graphite",
